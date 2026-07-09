@@ -1,25 +1,24 @@
-import type { TrackedLandmark } from "./poseTypes";
+// =============================================================
+// 複数人物から対象人物を選択する。
+// 今後の複数人物対応（人物ID追跡など）はこのモジュールを拡張する。
+// =============================================================
 
-function getPoseCenter(
-  landmarks: { x: number; y: number; visibility?: number }[]
-): { x: number; y: number } | null {
-  const visible = landmarks.filter(
-    (point) => point.visibility === undefined || point.visibility > 0.35
-  );
+import { averagePoint, distanceSquared } from "./poseMath";
+import { filterVisibleLandmarks } from "./poseLandmarks";
+import type { Point2D, TrackedLandmark } from "./poseTypes";
 
-  if (visible.length === 0) {
-    return null;
-  }
-
-  return {
-    x: visible.reduce((sum, point) => sum + point.x, 0) / visible.length,
-    y: visible.reduce((sum, point) => sum + point.y, 0) / visible.length,
-  };
+/** 可視骨格点の平均座標を人物の中心とみなす */
+export function getPoseCenter(landmarks: TrackedLandmark[]): Point2D | null {
+  return averagePoint(filterVisibleLandmarks(landmarks));
 }
 
+/**
+ * ユーザーが指定した座標に最も近い人物を選ぶ。
+ * 指定がない場合は先頭の人物を返す。
+ */
 export function selectPoseByPoint(
   poses: TrackedLandmark[][],
-  selectedPoint?: { x: number; y: number } | null
+  selectedPoint?: Point2D | null
 ): TrackedLandmark[] | null {
   if (poses.length === 0) {
     return null;
@@ -39,12 +38,10 @@ export function selectPoseByPoint(
       continue;
     }
 
-    const dx = center.x - selectedPoint.x;
-    const dy = center.y - selectedPoint.y;
-    const distance = dx * dx + dy * dy;
+    const currentDistance = distanceSquared(center, selectedPoint);
 
-    if (distance < bestDistance) {
-      bestDistance = distance;
+    if (currentDistance < bestDistance) {
+      bestDistance = currentDistance;
       bestPose = pose;
     }
   }

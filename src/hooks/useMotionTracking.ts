@@ -55,6 +55,7 @@ export function useMotionTracking(
   const [trackingMessage, setTrackingMessage] = useState("");
   const [trackingProgress, setTrackingProgress] = useState(0);
   const [isTracking, setIsTracking] = useState(false);
+  const [isSmoothingEnabled, setIsSmoothingEnabled] = useState(true);
 
   const currentTrackedFrame = useMemo(() => {
     if (trackedFrames.length === 0) return null;
@@ -98,7 +99,8 @@ export function useMotionTracking(
         video,
         fps,
         setTrackingProgress,
-        selectedPoint
+        selectedPoint,
+        { smoothing: { enabled: isSmoothingEnabled } }
       );
 
       setTrackedFrames(result.frames);
@@ -120,6 +122,8 @@ export function useMotionTracking(
     trackingMessage,
     trackingProgress,
     isTracking,
+    isSmoothingEnabled,
+    setIsSmoothingEnabled,
     runTracking,
     resetTracking,
   };

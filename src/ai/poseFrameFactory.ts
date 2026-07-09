@@ -1,12 +1,173 @@
-import { calculateAngle } from "./poseMath";
-import type {
-  TrackedFrame,
-  TrackedLandmark,
-} from "./poseTypes";
+// =============================================================
+// 1フレーム分の骨格点から TrackedFrame を生成する。
+// Visibility判定 → バウンディングボックス → Crop → 関節角度 の順に処理する。
+// =============================================================
 
-const MIN_POINT_VISIBILITY = 0.35;
+import { angleOrNull, calculateTiltDegrees } from "./poseMath";
+import { filterVisibleLandmarks, getBodyJoints } from "./poseLandmarks";
+import type { TrackedFrame, TrackedLandmark } from "./poseTypes";
+
 const MIN_AVERAGE_VISIBILITY = 0.6;
 const MIN_VISIBLE_POINT_COUNT = 8;
+
+const CROP_PADDING_RATIO_X = 0.45;
+const CROP_PADDING_RATIO_Y = 0.35;
+
+type Bounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+};
+
+function hasEnoughVisibility(visibleLandmarks: TrackedLandmark[]): boolean {
+  if (visibleLandmarks.length < MIN_VISIBLE_POINT_COUNT) {
+    return false;
+  }
+
+  const averageVisibility =
+    visibleLandmarks.reduce((sum, point) => sum + (point.visibility ?? 1), 0) /
+    visibleLandmarks.length;
+
+  return averageVisibility >= MIN_AVERAGE_VISIBILITY;
+}
+
+function calculateBounds(
+  visibleLandmarks: TrackedLandmark[],
+  videoWidth: number,
+  videoHeight: number
+): Bounds | null {
+  const xs = visibleLandmarks.map((point) => point.x);
+  const ys = visibleLandmarks.map((point) => point.y);
+
+  const bounds: Bounds = {
+    minX: Math.max(0, Math.min(...xs)),
+    maxX: Math.min(videoWidth, Math.max(...xs)),
+    minY: Math.max(0, Math.min(...ys)),
+    maxY: Math.min(videoHeight, Math.max(...ys)),
+  };
+
+  if (bounds.maxX - bounds.minX <= 0 || bounds.maxY - bounds.minY <= 0) {
+    return null;
+  }
+
+  return bounds;
+}
+
+function createCrop(
+  bounds: Bounds,
+  videoWidth: number,
+  videoHeight: number
+): TrackedFrame["crop"] {
+  const rawWidth = bounds.maxX - bounds.minX;
+  const rawHeight = bounds.maxY - bounds.minY;
+
+  const paddingX = rawWidth * CROP_PADDING_RATIO_X;
+  const paddingY = rawHeight * CROP_PADDING_RATIO_Y;
+
+  const cropX = Math.max(0, bounds.minX - paddingX);
+  const cropY = Math.max(0, bounds.minY - paddingY);
+
+  return {
+    x: cropX,
+    y: cropY,
+    width: Math.min(videoWidth - cropX, rawWidth + paddingX * 2),
+    height: Math.min(videoHeight - cropY, rawHeight + paddingY * 2),
+  };
+}
+
+type JointAngles = Pick<
+  TrackedFrame,
+  | "leftKneeAngle"
+  | "rightKneeAngle"
+  | "hipAngle"
+  | "shoulderTilt"
+  | "leftHipAngle"
+  | "rightHipAngle"
+  | "leftElbowAngle"
+  | "rightElbowAngle"
+  | "leftShoulderAngle"
+  | "rightShoulderAngle"
+>;
+
+function calculateJointAngles(landmarks: TrackedLandmark[]): JointAngles {
+  const joints = getBodyJoints(landmarks);
+
+  const leftHipAngle = angleOrNull(
+    joints.leftShoulder,
+    joints.leftHip,
+    joints.leftKnee
+  );
+
+  const shoulderTilt =
+    joints.leftShoulder && joints.rightShoulder
+      ? calculateTiltDegrees(joints.leftShoulder, joints.rightShoulder)
+      : null;
+
+  return {
+    leftKneeAngle: angleOrNull(joints.leftHip, joints.leftKnee, joints.leftAnkle),
+    rightKneeAngle: angleOrNull(
+      joints.rightHip,
+      joints.rightKnee,
+      joints.rightAnkle
+    ),
+    hipAngle: leftHipAngle,
+    shoulderTilt,
+    leftHipAngle,
+    rightHipAngle: angleOrNull(
+      joints.rightShoulder,
+      joints.rightHip,
+      joints.rightKnee
+    ),
+    leftElbowAngle: angleOrNull(
+      joints.leftShoulder,
+      joints.leftElbow,
+      joints.leftWrist
+    ),
+    rightElbowAngle: angleOrNull(
+      joints.rightShoulder,
+      joints.rightElbow,
+      joints.rightWrist
+    ),
+    leftShoulderAngle: angleOrNull(
+      joints.leftElbow,
+      joints.leftShoulder,
+      joints.leftHip
+    ),
+    rightShoulderAngle: angleOrNull(
+      joints.rightElbow,
+      joints.rightShoulder,
+      joints.rightHip
+    ),
+  };
+}
+
+export function recreateTrackedFrameFromLandmarks(
+  baseFrame: TrackedFrame,
+  landmarks: TrackedLandmark[],
+  videoWidth: number,
+  videoHeight: number
+): TrackedFrame {
+  const visibleLandmarks = filterVisibleLandmarks(landmarks);
+  const bounds = calculateBounds(visibleLandmarks, videoWidth, videoHeight);
+
+  if (!bounds) {
+    return {
+      ...baseFrame,
+      landmarks,
+      ...calculateJointAngles(landmarks),
+    };
+  }
+
+  return {
+    ...baseFrame,
+    landmarks,
+    crop: createCrop(bounds, videoWidth, videoHeight),
+    centerX: (bounds.minX + bounds.maxX) / 2,
+    centerY: (bounds.minY + bounds.maxY) / 2,
+    ...calculateJointAngles(landmarks),
+  };
+}
 
 export function createTrackedFrame(
   landmarks: TrackedLandmark[],
@@ -19,119 +180,25 @@ export function createTrackedFrame(
     return null;
   }
 
-  const visible = landmarks.filter(
-    (point) =>
-      point.visibility === undefined || point.visibility > MIN_POINT_VISIBILITY
-  );
+  const visibleLandmarks = filterVisibleLandmarks(landmarks);
 
-  if (visible.length < MIN_VISIBLE_POINT_COUNT) {
+  if (!hasEnoughVisibility(visibleLandmarks)) {
     return null;
   }
 
-  const averageVisibility =
-    visible.reduce((sum, point) => sum + (point.visibility ?? 1), 0) /
-    visible.length;
+  const bounds = calculateBounds(visibleLandmarks, videoWidth, videoHeight);
 
-  if (averageVisibility < MIN_AVERAGE_VISIBILITY) {
+  if (!bounds) {
     return null;
   }
-
-  const xs = visible.map((point) => point.x);
-  const ys = visible.map((point) => point.y);
-
-  const minX = Math.max(0, Math.min(...xs));
-  const maxX = Math.min(videoWidth, Math.max(...xs));
-  const minY = Math.max(0, Math.min(...ys));
-  const maxY = Math.min(videoHeight, Math.max(...ys));
-
-  const rawWidth = maxX - minX;
-  const rawHeight = maxY - minY;
-
-  if (rawWidth <= 0 || rawHeight <= 0) {
-    return null;
-  }
-
-  const paddingX = rawWidth * 0.45;
-  const paddingY = rawHeight * 0.35;
-
-  const cropX = Math.max(0, minX - paddingX);
-  const cropY = Math.max(0, minY - paddingY);
-  const cropW = Math.min(videoWidth - cropX, rawWidth + paddingX * 2);
-  const cropH = Math.min(videoHeight - cropY, rawHeight + paddingY * 2);
-
-  const leftShoulder = landmarks[11];
-  const rightShoulder = landmarks[12];
-
-  const leftElbow = landmarks[13];
-  const rightElbow = landmarks[14];
-
-  const leftWrist = landmarks[15];
-  const rightWrist = landmarks[16];
-
-  const leftHip = landmarks[23];
-  const rightHip = landmarks[24];
-
-  const leftKnee = landmarks[25];
-  const rightKnee = landmarks[26];
-
-  const leftAnkle = landmarks[27];
-  const rightAnkle = landmarks[28];
 
   return {
     frameIndex,
     time,
     landmarks,
-    crop: {
-      x: cropX,
-      y: cropY,
-      width: cropW,
-      height: cropH,
-    },
-    centerX: (minX + maxX) / 2,
-    centerY: (minY + maxY) / 2,
-    leftKneeAngle:
-      leftHip && leftKnee && leftAnkle
-        ? calculateAngle(leftHip, leftKnee, leftAnkle)
-        : null,
-    rightKneeAngle:
-      rightHip && rightKnee && rightAnkle
-        ? calculateAngle(rightHip, rightKnee, rightAnkle)
-        : null,
-    hipAngle:
-      leftShoulder && leftHip && leftKnee
-        ? calculateAngle(leftShoulder, leftHip, leftKnee)
-        : null,
-    shoulderTilt:
-      leftShoulder && rightShoulder
-        ? Math.atan2(
-            rightShoulder.y - leftShoulder.y,
-            rightShoulder.x - leftShoulder.x
-          ) *
-          (180 / Math.PI)
-        : null,
-    leftHipAngle:
-      leftShoulder && leftHip && leftKnee
-        ? calculateAngle(leftShoulder, leftHip, leftKnee)
-        : null,
-    rightHipAngle:
-      rightShoulder && rightHip && rightKnee
-        ? calculateAngle(rightShoulder, rightHip, rightKnee)
-        : null,
-    leftElbowAngle:
-      leftShoulder && leftElbow && leftWrist
-        ? calculateAngle(leftShoulder, leftElbow, leftWrist)
-        : null,
-    rightElbowAngle:
-      rightShoulder && rightElbow && rightWrist
-        ? calculateAngle(rightShoulder, rightElbow, rightWrist)
-        : null,
-    leftShoulderAngle:
-      leftElbow && leftShoulder && leftHip
-        ? calculateAngle(leftElbow, leftShoulder, leftHip)
-        : null,
-    rightShoulderAngle:
-      rightElbow && rightShoulder && rightHip
-        ? calculateAngle(rightElbow, rightShoulder, rightHip)
-        : null,
+    crop: createCrop(bounds, videoWidth, videoHeight),
+    centerX: (bounds.minX + bounds.maxX) / 2,
+    centerY: (bounds.minY + bounds.maxY) / 2,
+    ...calculateJointAngles(landmarks),
   };
 }

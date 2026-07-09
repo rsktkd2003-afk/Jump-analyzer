@@ -9,6 +9,7 @@ import JumpPhasePanel from "./JumpPhasePanel";
 import MotionFingerprint from "./MotionFingerprint";
 import MotionHistoryPanel from "./MotionHistoryPanel";
 import SkillAnalysisPanel from "./SkillAnalysisPanel";
+import ApproachLandingPanel from "./ApproachLandingPanel";
 
 import { useMotionTracking } from "../hooks/useMotionTracking";
 import type { SelectedPersonPoint } from "../hooks/useSelectedPerson";
@@ -21,11 +22,6 @@ type Props = {
   selectedPoint: SelectedPersonPoint | null;
 };
 
-/**
- * 人物トラッキングのセクション。
- * トラッキング状態は内部で管理するため、動画差し替え時は
- * 親側で key を変えて再マウントすればリセットされる。
- */
 export default function TrackingSection({
   videoRef,
   fps,
@@ -41,6 +37,8 @@ export default function TrackingSection({
     trackingMessage,
     trackingProgress,
     isTracking,
+    isSmoothingEnabled,
+    setIsSmoothingEnabled,
     runTracking,
   } = useMotionTracking(videoRef, fps, currentTime, selectedPoint);
 
@@ -51,6 +49,24 @@ export default function TrackingSection({
       <p style={hintStyle}>
         先に動画内の選手をクリックしてから、トラッキングを実行してください。
       </p>
+
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: 14,
+          marginBottom: 8,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={isSmoothingEnabled}
+          disabled={isTracking}
+          onChange={(event) => setIsSmoothingEnabled(event.target.checked)}
+        />
+        Kalman平滑化を使う
+      </label>
 
       <button
         onClick={runTracking}
@@ -100,6 +116,8 @@ export default function TrackingSection({
           <SkillAnalysisPanel frames={trackedFrames} />
 
           <JumpPhasePanel frames={trackedFrames} />
+
+          <ApproachLandingPanel frames={trackedFrames} />
 
           <MotionFingerprint frames={trackedFrames} />
 

@@ -1,21 +1,10 @@
-import type { FormAnalysisResult } from "./formAnalyzer";
+// =============================================================
+// AI解析層のすべての型定義。
+// このファイルは他のsrc/aiモジュールに依存しない（依存方向の終点）。
+// =============================================================
 
-export type PoseAnalysisResult = {
-  bestFrame: number | null;
-  bestTime: number | null;
-  confidence: number;
-  message: string;
-};
-
-export type JumpFormAnalysisResult = {
-  frame: number | null;
-  time: number | null;
-  confidence: number;
-  message: string;
-  form: FormAnalysisResult | null;
-};
-
-export type PoseOverlayPoint = {
+/** 2次元座標。数学処理・人物選択などで共用する */
+export type Point2D = {
   x: number;
   y: number;
 };
@@ -61,10 +50,45 @@ export type TrackedFrame = {
   rightShoulderAngle: number | null;
 };
 
+export type LandmarkSmoothingOptions = {
+  enabled?: boolean;
+};
+
+export type MotionTrackingOptions = {
+  smoothing?: LandmarkSmoothingOptions;
+};
+
 export type MotionTrackingResult = {
   frames: TrackedFrame[];
   detectedFrameCount: number;
   checkedFrameCount: number;
   confidence: number;
   message: string;
+};
+
+export type PoseAnalysisResult = {
+  bestFrame: number | null;
+  bestTime: number | null;
+  confidence: number;
+  message: string;
+};
+
+export type FormAnalysisResult = {
+  elbowText: string;
+  postureText: string;
+  kneeText: string;
+  summary: string;
+};
+
+export type JumpFormAnalysisResult = {
+  frame: number | null;
+  time: number | null;
+  confidence: number;
+  message: string;
+  form: FormAnalysisResult | null;
+};
+
+export type PoseOverlayPoint = {
+  x: number;
+  y: number;
 };

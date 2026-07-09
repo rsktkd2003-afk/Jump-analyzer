@@ -22,6 +22,7 @@ import {
   loadMeasurementHistory,
   saveMeasurementHistory,
 } from "./storage/measurementStorage";
+import { estimateReachFromInputs } from "./ai/reachEstimateAnalyzer";
 
 const initialMarkers: Markers = {
   calibA: null,
@@ -36,7 +37,9 @@ function JumpAnalyzer() {
   const [fps, setFps] = useState(60);
   const [knownCm, setKnownCm] = useState(45);
   const [ringHeight, setRingHeight] = useState(305);
+  const [heightCm, setHeightCm] = useState(170);
   const [standingReach, setStandingReach] = useState(214);
+  const [knownMaxReach, setKnownMaxReach] = useState<number | null>(null);
   const [target, setTarget] = useState<MarkerTarget>("calibA");
 
   const [markers, setMarkers] = useState<Markers>(initialMarkers);
@@ -102,6 +105,26 @@ function JumpAnalyzer() {
     [ballSpeed]
   );
 
+  const reachEstimate = useMemo(
+    () =>
+      estimateReachFromInputs({
+        standingReachCm: standingReach,
+        heightCm,
+        calibrationMaxReachCm: maxReach,
+        flightTimeJumpHeightCm: estimatedJumpHeight,
+        knownMaxReachCm: knownMaxReach,
+        calibrationErrorCm: reachError,
+      }),
+    [
+      standingReach,
+      heightCm,
+      maxReach,
+      estimatedJumpHeight,
+      knownMaxReach,
+      reachError,
+    ]
+  );
+
   const handleMarkerPlace = (
     target: MarkerTarget,
     point: { x: number; y: number }
@@ -155,6 +178,13 @@ function JumpAnalyzer() {
       airTime,
       airFrameCount,
       estimatedJumpHeight,
+      estimatedMaxReach: reachEstimate.estimatedMaxReachCm,
+      estimatedReachJumpHeight: reachEstimate.estimatedJumpHeightCm,
+      reachEstimateMethod: reachEstimate.method,
+      reachEstimateConfidence: reachEstimate.confidence,
+      heightCm,
+      standingReach,
+      knownMaxReach,
       peakTime,
       peakFrame,
       reachError,
@@ -177,13 +207,21 @@ function JumpAnalyzer() {
       "🏐 Jump Analyzer 測定結果",
       `最高到達点：${maxReach ? `${maxReach.toFixed(1)}cm` : "-"}`,
       `ジャンプ高：${jumpHeight ? `${jumpHeight.toFixed(1)}cm` : "-"}`,
+      `推定最高到達点：${
+        reachEstimate.estimatedMaxReachCm !== null
+          ? `${reachEstimate.estimatedMaxReachCm.toFixed(1)}cm`
+          : "-"
+      }`,
+      `推定ジャンプ高：${
+        reachEstimate.estimatedJumpHeightCm !== null
+          ? `${reachEstimate.estimatedJumpHeightCm.toFixed(1)}cm`
+          : "-"
+      }`,
+      `換算方式：${reachEstimate.methodLabel}`,
       `離地A：${frameA !== null ? `${frameA}F` : "-"}`,
       `着地B：${frameB !== null ? `${frameB}F` : "-"}`,
       `滞空時間：${airTime ? `${airTime.toFixed(3)}秒` : "-"}`,
       `滞空フレーム数：${airFrameCount ? `${airFrameCount}F` : "-"}`,
-      `推定ジャンプ高：${
-        estimatedJumpHeight ? `${estimatedJumpHeight.toFixed(1)}cm` : "-"
-      }`,
       `最高点フレーム：${peakFrame !== null ? `${peakFrame}F` : "-"}`,
       `球速：${ballSpeed ? `${ballSpeed.toFixed(1)}km/h` : "-"}`,
       `誤差：${reachError ? `±${reachError.toFixed(1)}cm` : "-"}`,
@@ -210,12 +248,36 @@ function JumpAnalyzer() {
 
       <section>
         <label>
+          身長(cm)：
+          <input
+            type="number"
+            value={heightCm}
+            onChange={(e) => setHeightCm(Number(e.target.value))}
+            style={{ width: 80, fontSize: 16, marginLeft: 8 }}
+          />
+        </label>
+
+        <label style={{ display: "block", marginTop: 8 }}>
           指高(cm)：
           <input
             type="number"
             value={standingReach}
             onChange={(e) => setStandingReach(Number(e.target.value))}
             style={{ width: 80, fontSize: 16, marginLeft: 8 }}
+          />
+        </label>
+
+        <label style={{ display: "block", marginTop: 8 }}>
+          既知の最高到達点(cm)：
+          <input
+            type="number"
+            value={knownMaxReach ?? ""}
+            onChange={(e) => {
+              const value = e.target.value;
+              setKnownMaxReach(value === "" ? null : Number(value));
+            }}
+            placeholder="任意"
+            style={{ width: 90, fontSize: 16, marginLeft: 8 }}
           />
         </label>
       </section>
@@ -293,6 +355,32 @@ function JumpAnalyzer() {
           value={jumpHeight ? `約 ${jumpHeight.toFixed(1)} cm` : "-"}
           subText={`指高：${standingReach}cm`}
         />
+
+        <ResultCard
+          title="推定最高到達点cm"
+          value={
+            reachEstimate.estimatedMaxReachCm !== null
+              ? `約 ${reachEstimate.estimatedMaxReachCm.toFixed(1)} cm`
+              : "-"
+          }
+          subText={`${reachEstimate.methodLabel} / ${reachEstimate.confidenceText}`}
+        />
+
+        <ResultCard
+          title="推定ジャンプ高cm"
+          value={
+            reachEstimate.estimatedJumpHeightCm !== null
+              ? `約 ${reachEstimate.estimatedJumpHeightCm.toFixed(1)} cm`
+              : "-"
+          }
+          subText={`指高：${reachEstimate.standingReachCm ?? "-"}cm / ${
+            reachEstimate.scaleInfo
+          }`}
+        />
+
+        <p style={{ fontSize: 13, color: "#666", lineHeight: 1.6 }}>
+          {reachEstimate.note}
+        </p>
 
         <ResultCard
           title="滞空時間"
