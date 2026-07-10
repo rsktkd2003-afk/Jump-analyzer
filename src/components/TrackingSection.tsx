@@ -10,6 +10,8 @@ import MotionFingerprint from "./MotionFingerprint";
 import MotionHistoryPanel from "./MotionHistoryPanel";
 import SkillAnalysisPanel from "./SkillAnalysisPanel";
 import ApproachLandingPanel from "./ApproachLandingPanel";
+import SpikeFormEvaluationPanel from "./SpikeFormEvaluationPanel";
+import type { SpikeArmForm } from "../ai/spikeFormEvaluation";
 
 import { useMotionTracking } from "../hooks/useMotionTracking";
 import type { SelectedPersonPoint } from "../hooks/useSelectedPerson";
@@ -34,6 +36,8 @@ export default function TrackingSection({
 }: Props) {
   const [isCropMode, setIsCropMode] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
+  const [selectedSpikeForm, setSelectedSpikeForm] =
+    useState<SpikeArmForm>("straightArm");
 
   const {
     trackedFrames,
@@ -118,6 +122,12 @@ export default function TrackingSection({
           <MotionGraph frames={trackedFrames} />
 
           <SkillAnalysisPanel frames={trackedFrames} bodyProfile={bodyProfile} />
+
+          <SpikeFormEvaluationPanel
+            frames={trackedFrames}
+            selectedForm={selectedSpikeForm}
+            onSelectedFormChange={setSelectedSpikeForm}
+          />
 
           <JumpPhasePanel frames={trackedFrames} />
 
