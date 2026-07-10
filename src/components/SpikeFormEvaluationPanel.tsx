@@ -1,5 +1,9 @@
 import { useMemo } from "react";
 
+import type { CaptureSettings } from "./captureSettings";
+import { DEFAULT_CAPTURE_SETTINGS } from "./captureSettings";
+import { getCaptureConfidenceFactor } from "./captureConfidence";
+
 import {
   evaluateSpikeForm,
   formatMetricValue,
