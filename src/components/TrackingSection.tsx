@@ -13,6 +13,7 @@ import ApproachLandingPanel from "./ApproachLandingPanel";
 
 import { useMotionTracking } from "../hooks/useMotionTracking";
 import type { SelectedPersonPoint } from "../hooks/useSelectedPerson";
+import type { BodyProfile } from "../analysis/evaluation";
 import { buttonStyle, hintStyle } from "../styles/ui";
 
 type Props = {
@@ -20,6 +21,8 @@ type Props = {
   fps: number;
   currentTime: number;
   selectedPoint: SelectedPersonPoint | null;
+  /** 身長・指高（cm換算用、任意） */
+  bodyProfile?: BodyProfile;
 };
 
 export default function TrackingSection({
@@ -27,6 +30,7 @@ export default function TrackingSection({
   fps,
   currentTime,
   selectedPoint,
+  bodyProfile,
 }: Props) {
   const [isCropMode, setIsCropMode] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
@@ -113,7 +117,7 @@ export default function TrackingSection({
 
           <MotionGraph frames={trackedFrames} />
 
-          <SkillAnalysisPanel frames={trackedFrames} />
+          <SkillAnalysisPanel frames={trackedFrames} bodyProfile={bodyProfile} />
 
           <JumpPhasePanel frames={trackedFrames} />
 

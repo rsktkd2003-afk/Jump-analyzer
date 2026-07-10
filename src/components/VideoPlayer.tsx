@@ -7,6 +7,7 @@ import { useVideoSource } from "../hooks/useVideoSource";
 import { numberInputStyle } from "../styles/ui";
 
 import type { MarkerTarget, Markers } from "../types/measurement";
+import type { BodyProfile } from "../analysis/evaluation";
 
 export type { TimeSaveLabel };
 
@@ -18,6 +19,8 @@ type Props = {
   markers: Markers;
   markerTarget: MarkerTarget;
   onMarkerPlace: (target: MarkerTarget, point: { x: number; y: number }) => void;
+  /** 身長・指高（トラッキング解析のcm換算用、任意） */
+  bodyProfile?: BodyProfile;
 };
 
 const markerLabels: Record<MarkerTarget, string> = {
@@ -37,6 +40,7 @@ export default function VideoPlayer({
   markers,
   markerTarget,
   onMarkerPlace,
+  bodyProfile,
 }: Props) {
   const {
     videoRef,
@@ -214,6 +218,7 @@ export default function VideoPlayer({
             fps={fps}
             currentTime={currentTime}
             selectedPoint={selectedPoint}
+            bodyProfile={bodyProfile}
           />
 
           <hr />

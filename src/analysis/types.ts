@@ -6,7 +6,9 @@ export type Phase =
   | "ascent"
   | "peak"
   | "contact"
-  | "landing";
+  | "descent"
+  | "landing"
+  | "finish";
 
 export type SkillId = "spikeJump" | "receive" | "block";
 
@@ -17,7 +19,13 @@ export type Region =
   | "arm"
   | "symmetry";
 
-export type FeatureUnit = "deg" | "ratio" | "sec" | "normPx";
+export type FeatureUnit =
+  | "deg"
+  | "ratio"
+  | "sec"
+  | "normPx"
+  | "degPerSec"
+  | "normPxPerSec";
 
 export type Feature = {
   key: string;

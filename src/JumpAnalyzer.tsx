@@ -286,6 +286,7 @@ function JumpAnalyzer() {
 
       <VideoPlayer
         fps={fps}
+        bodyProfile={{ heightCm, standingReachCm: standingReach }}
         onFpsChange={setFps}
         onTimeSave={handleTimeSave}
         onPeakDetected={(frame, time) => {

@@ -1,15 +1,23 @@
+// =============================================================
+// スパイクジャンプの競技分析。
+// フェーズ分割は jumpPhaseEngine（接地判定ベース・順序保証・非重複）に
+// 一本化し、このファイルは特徴量（競技指標）の抽出に専念する。
+// visibility < 0.5 のフレームはエンジン側で補間/除外済み。
+// =============================================================
+
 import type { TrackedFrame } from "../../ai/poseAnalyzer";
+import {
+  findEnginePhase,
+  runJumpPhaseEngine,
+  type JumpPhaseEngineResult,
+} from "../../ai/jumpPhaseEngine";
 import type { Feature, PhaseSegment, SkillDefinition } from "../types";
 import {
   average,
   calculateVisibilityConfidence,
-  findFrameAtOrNearestTime,
-  findIndexByFrameIndex,
-  getFramesInSegment,
   getSegmentFrames,
-  getSeriesStats,
-  makeSegment,
   normalizeByBody,
+  stdDev,
   toSeries,
 } from "../utils";
 
@@ -23,7 +31,6 @@ function getAverageKneeAngle(frame: TrackedFrame): number | null {
   const values = [frame.leftKneeAngle, frame.rightKneeAngle].filter(
     (value): value is number => typeof value === "number"
   );
-
   return average(values);
 }
 
@@ -31,52 +38,7 @@ function getAverageHipAngle(frame: TrackedFrame): number | null {
   const values = [frame.leftHipAngle, frame.rightHipAngle].filter(
     (value): value is number => typeof value === "number"
   );
-
   return average(values);
-}
-
-function findKneeExtensionStart(
-  frames: TrackedFrame[],
-  takeoffIndex: number,
-  peakIndex: number
-): TrackedFrame | null {
-  const range = getSegmentFrames(frames, takeoffIndex, peakIndex);
-
-  for (let i = 1; i < range.length; i += 1) {
-    const previous = getAverageKneeAngle(range[i - 1]);
-    const current = getAverageKneeAngle(range[i]);
-
-    if (previous === null || current === null) continue;
-
-    if (current > previous) {
-      return range[i];
-    }
-  }
-
-  return range[0] ?? null;
-}
-
-function getWristPeakTime(frames: TrackedFrame[]): number | null {
-  let bestTime: number | null = null;
-  let bestY = Number.POSITIVE_INFINITY;
-
-  for (const frame of frames) {
-    const leftWrist = frame.landmarks[LEFT_WRIST];
-    const rightWrist = frame.landmarks[RIGHT_WRIST];
-
-    const wristCandidates = [leftWrist, rightWrist].filter(Boolean);
-
-    for (const wrist of wristCandidates) {
-      if (!wrist) continue;
-
-      if (wrist.y < bestY) {
-        bestY = wrist.y;
-        bestTime = frame.time;
-      }
-    }
-  }
-
-  return bestTime;
 }
 
 function pushFeature(features: Feature[], feature: Feature | null) {
@@ -85,207 +47,470 @@ function pushFeature(features: Feature[], feature: Feature | null) {
   features.push(feature);
 }
 
-function findSegment(
-  segments: PhaseSegment[],
-  phase: PhaseSegment["phase"]
-): PhaseSegment | null {
-  return segments.find((segment) => segment.phase === phase) ?? null;
+// -------------------------------------------------------------
+// セグメンテーション：エンジンの結果をPhaseSegmentへ変換
+// -------------------------------------------------------------
+
+function toPhaseSegments(
+  frames: TrackedFrame[],
+  engine: JumpPhaseEngineResult
+): PhaseSegment[] {
+  return engine.phases.map((phase) => ({
+    phase: phase.name,
+    startTime: phase.startTime,
+    endTime: phase.endTime,
+    startFrame: frames[phase.startIndex].frameIndex,
+    endFrame: frames[phase.endIndex].frameIndex,
+  }));
 }
 
 function segmentSpikeJump(frames: TrackedFrame[]): PhaseSegment[] {
-  if (frames.length < 3) return [];
+  const engine = runJumpPhaseEngine(frames);
+  if (!engine) return [];
+  return toPhaseSegments(frames, engine);
+}
 
-  const centerYStats = getSeriesStats(toSeries(frames, (frame) => frame.centerY));
-  const kneeStats = getSeriesStats(toSeries(frames, getAverageKneeAngle));
+// -------------------------------------------------------------
+// 特徴量抽出
+// -------------------------------------------------------------
 
-  if (!centerYStats || !kneeStats) return [];
+/** 区間内の膝角度の最大伸展角速度（deg/秒）。踏切の爆発力の指標 */
+function maxKneeExtensionVelocity(
+  frames: TrackedFrame[],
+  from: number,
+  to: number
+): number | null {
+  let best: number | null = null;
 
-  const peakIndex = findIndexByFrameIndex(frames, centerYStats.min.frameIndex);
-  const takeoffIndex = findIndexByFrameIndex(frames, kneeStats.min.frameIndex);
+  for (let i = Math.max(1, from + 1); i <= to && i < frames.length; i += 1) {
+    const prev = getAverageKneeAngle(frames[i - 1]);
+    const current = getAverageKneeAngle(frames[i]);
+    if (prev === null || current === null) continue;
 
-  if (peakIndex < 0 || takeoffIndex < 0) return [];
+    const dt = frames[i].time - frames[i - 1].time;
+    if (dt <= 0) continue;
 
-  const segments: PhaseSegment[] = [];
-
-  const approachEnd = Math.max(0, takeoffIndex - 1);
-  if (approachEnd > 0) {
-    segments.push(makeSegment("approach", frames, 0, approachEnd));
+    const velocity = (current - prev) / dt; // 伸展 = 角度増加 = 正
+    if (velocity > 0 && (best === null || velocity > best)) {
+      best = velocity;
+    }
   }
 
-  segments.push(makeSegment("takeoff", frames, takeoffIndex, takeoffIndex));
+  return best;
+}
 
-  if (peakIndex > takeoffIndex) {
-    segments.push(makeSegment("ascent", frames, takeoffIndex, peakIndex));
+/** 区間内の手首の最大上向き速度（px/秒→体幹正規化して返す用の生値） */
+function maxWristUpwardVelocityPx(
+  frames: TrackedFrame[],
+  from: number,
+  to: number
+): number | null {
+  let best: number | null = null;
+
+  for (let i = Math.max(1, from + 1); i <= to && i < frames.length; i += 1) {
+    const dt = frames[i].time - frames[i - 1].time;
+    if (dt <= 0) continue;
+
+    for (const wristIndex of [LEFT_WRIST, RIGHT_WRIST]) {
+      const prev = frames[i - 1].landmarks[wristIndex];
+      const current = frames[i].landmarks[wristIndex];
+      if (!prev || !current) continue;
+      if ((prev.visibility ?? 1) < 0.5 || (current.visibility ?? 1) < 0.5) {
+        continue;
+      }
+
+      // 画像座標はy下向き正。上向き速度 = -(dy/dt)
+      const upward = -(current.y - prev.y) / dt;
+      if (upward > 0 && (best === null || upward > best)) {
+        best = upward;
+      }
+    }
   }
 
-  segments.push(makeSegment("peak", frames, peakIndex, peakIndex));
+  return best;
+}
 
-  const contactEnd = Math.min(frames.length - 1, peakIndex + 2);
-  if (contactEnd >= peakIndex) {
-    segments.push(makeSegment("contact", frames, peakIndex, contactEnd));
+/** 区間の左右膝角度差の平均（deg）。左右対称指数 */
+function meanKneeAsymmetry(
+  frames: TrackedFrame[],
+  ranges: Array<[number, number]>
+): number | null {
+  const diffs: number[] = [];
+
+  for (const [from, to] of ranges) {
+    for (let i = from; i <= to && i < frames.length; i += 1) {
+      const frame = frames[i];
+      if (
+        typeof frame.leftKneeAngle === "number" &&
+        typeof frame.rightKneeAngle === "number"
+      ) {
+        diffs.push(Math.abs(frame.leftKneeAngle - frame.rightKneeAngle));
+      }
+    }
   }
 
-  if (frames.length - 1 > peakIndex) {
-    segments.push(makeSegment("landing", frames, peakIndex, frames.length - 1));
-  }
-
-  return segments;
+  return average(diffs);
 }
 
 function extractSpikeJump(
   frames: TrackedFrame[],
   segments: PhaseSegment[]
 ): Feature[] {
-  if (frames.length === 0) return [];
+  if (frames.length === 0 || segments.length === 0) return [];
 
+  const engine = runJumpPhaseEngine(frames);
+  if (!engine) return [];
+
+  const { events } = engine;
   const features: Feature[] = [];
+  const times = frames.map((f) => f.time);
 
-  const takeoffSegment = findSegment(segments, "takeoff");
-  const ascentSegment = findSegment(segments, "ascent");
-  const peakSegment = findSegment(segments, "peak");
-  const contactSegment = findSegment(segments, "contact");
+  const approach = findEnginePhase(engine, "approach");
+  const landing = findEnginePhase(engine, "landing");
 
-  const centerXStats = getSeriesStats(toSeries(frames, (frame) => frame.centerX));
-  const centerYStats = getSeriesStats(toSeries(frames, (frame) => frame.centerY));
-  const kneeStats = getSeriesStats(toSeries(frames, getAverageKneeAngle));
+  const airFrom = events.takeoffIndex + 1;
+  const airTo = events.landingIndex - 1;
 
-  if (takeoffSegment && kneeStats) {
-    const takeoffFrames = getFramesInSegment(frames, takeoffSegment);
+  // --- 沈み込み時の膝角度（深さの指標） ---
+  {
+    const kneeStats = toSeries(
+      getSegmentFrames(frames, events.sinkStartIndex, events.takeoffIndex),
+      getAverageKneeAngle
+    );
+    const minKnee = kneeStats.reduce<number | null>(
+      (min, p) => (min === null || p.value < min ? p.value : min),
+      null
+    );
 
+    if (minKnee !== null) {
+      pushFeature(features, {
+        key: "takeoff.kneeMinAngle",
+        label: "沈み込み時の膝角度",
+        phase: "takeoff",
+        region: "lowerBody",
+        value: minKnee,
+        unit: "deg",
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, events.sinkStartIndex, events.takeoffIndex),
+          LOWER_BODY_LANDMARKS
+        ),
+      });
+    }
+  }
+
+  // --- 股関節角度の最小値 ---
+  {
+    const hipStats = toSeries(
+      getSegmentFrames(frames, events.sinkStartIndex, events.takeoffIndex),
+      getAverageHipAngle
+    );
+    const minHip = hipStats.reduce<number | null>(
+      (min, p) => (min === null || p.value < min ? p.value : min),
+      null
+    );
+
+    if (minHip !== null) {
+      pushFeature(features, {
+        key: "takeoff.hipMinAngle",
+        label: "沈み込み時の股関節角度",
+        phase: "takeoff",
+        region: "lowerBody",
+        value: minHip,
+        unit: "deg",
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, events.sinkStartIndex, events.takeoffIndex),
+          LOWER_BODY_LANDMARKS
+        ),
+      });
+    }
+  }
+
+  // --- 沈み込み時間（沈み込み開始→最下点） ---
+  if (events.sinkBottomIndex > events.sinkStartIndex) {
     pushFeature(features, {
-      key: "takeoff.kneeMinAngle",
-      label: "沈み込み時の膝角度",
+      key: "takeoff.sinkDurationSec",
+      label: "沈み込み時間",
       phase: "takeoff",
       region: "lowerBody",
-      value: kneeStats.min.value,
-      unit: "deg",
+      value: times[events.sinkBottomIndex] - times[events.sinkStartIndex],
+      unit: "sec",
       confidence: calculateVisibilityConfidence(
-        takeoffFrames.length > 0 ? takeoffFrames : frames,
+        getSegmentFrames(frames, events.sinkStartIndex, events.sinkBottomIndex),
         LOWER_BODY_LANDMARKS
       ),
     });
   }
 
-  if (ascentSegment && kneeStats) {
-    const takeoffFrame = findFrameAtOrNearestTime(frames, ascentSegment.startTime);
-    const peakFrame = findFrameAtOrNearestTime(frames, ascentSegment.endTime);
+  // --- 踏切時間（沈み込み開始→離地。接地時間の近似） ---
+  if (events.takeoffIndex > events.sinkStartIndex) {
+    pushFeature(features, {
+      key: "takeoff.contactTimeSec",
+      label: "踏切時間",
+      phase: "takeoff",
+      region: "lowerBody",
+      value: times[events.takeoffIndex] - times[events.sinkStartIndex],
+      unit: "sec",
+      confidence: calculateVisibilityConfidence(
+        getSegmentFrames(frames, events.sinkStartIndex, events.takeoffIndex),
+        LOWER_BODY_LANDMARKS
+      ),
+    });
+  }
 
-    if (takeoffFrame && peakFrame) {
-      const takeoffIndex = frames.indexOf(takeoffFrame);
-      const peakIndex = frames.indexOf(peakFrame);
-      const extensionFrame = findKneeExtensionStart(frames, takeoffIndex, peakIndex);
-
-      if (extensionFrame) {
-        const ascentDuration = ascentSegment.endTime - ascentSegment.startTime;
-        const relativeTime =
-          ascentDuration > 0
-            ? (extensionFrame.time - ascentSegment.startTime) / ascentDuration
-            : 0;
-
-        pushFeature(features, {
-          key: "ascent.kneeExtensionStartRatio",
-          label: "伸展開始タイミング",
-          phase: "ascent",
-          region: "lowerBody",
-          value: relativeTime,
-          unit: "ratio",
-          confidence: calculateVisibilityConfidence(
-            getFramesInSegment(frames, ascentSegment),
-            LOWER_BODY_LANDMARKS
-          ),
-        });
-      }
+  // --- 最大伸展速度（膝の角速度） ---
+  {
+    const velocity = maxKneeExtensionVelocity(
+      frames,
+      events.sinkBottomIndex,
+      Math.min(events.takeoffIndex + 2, frames.length - 1)
+    );
+    if (velocity !== null) {
+      pushFeature(features, {
+        key: "takeoff.maxExtensionVelocity",
+        label: "最大伸展速度（膝）",
+        phase: "takeoff",
+        region: "lowerBody",
+        value: velocity,
+        unit: "degPerSec",
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, events.sinkBottomIndex, events.takeoffIndex),
+          LOWER_BODY_LANDMARKS
+        ),
+      });
     }
   }
 
-  if (centerYStats) {
+  // --- 助走速度（体幹長/秒） ---
+  if (approach && approach.endIndex > approach.startIndex) {
+    const dt = approach.endTime - approach.startTime;
+    if (dt > 0) {
+      const dx = Math.abs(
+        events.comX[approach.endIndex] - events.comX[approach.startIndex]
+      );
+      pushFeature(features, {
+        key: "approach.speed",
+        label: "助走速度",
+        phase: "approach",
+        region: "centerOfMass",
+        value: normalizeByBody(frames, dx) / dt,
+        unit: "normPxPerSec",
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, approach.startIndex, approach.endIndex)
+        ),
+      });
+    }
+  }
+
+  // --- 滞空時間 ---
+  if (events.airTimeSec !== null) {
     pushFeature(features, {
-      key: "center.verticalRange",
-      label: "垂直方向の移動量",
+      key: "air.timeSec",
+      label: "滞空時間",
       phase: "ascent",
       region: "centerOfMass",
-      value: normalizeByBody(frames, Math.abs(centerYStats.range)),
-      unit: "normPx",
-      confidence: calculateVisibilityConfidence(frames),
+      value: events.airTimeSec,
+      unit: "sec",
+      confidence: calculateVisibilityConfidence(
+        getSegmentFrames(frames, events.takeoffIndex, events.landingIndex)
+      ),
     });
   }
 
-  if (centerXStats) {
-    pushFeature(features, {
-      key: "center.horizontalRange",
-      label: "水平方向の移動量",
-      phase: "ascent",
-      region: "centerOfMass",
-      value: normalizeByBody(frames, Math.abs(centerXStats.range)),
-      unit: "normPx",
-      confidence: calculateVisibilityConfidence(frames),
-    });
+  // --- 空中姿勢安定度（肩傾きの標準偏差。小さいほど安定） ---
+  if (airTo > airFrom) {
+    const tiltStd = stdDev(
+      getSegmentFrames(frames, airFrom, airTo).map((f) =>
+        typeof f.shoulderTilt === "number" ? Math.abs(f.shoulderTilt) : null
+      )
+    );
+    if (tiltStd !== null) {
+      pushFeature(features, {
+        key: "air.postureStability",
+        label: "空中姿勢の揺れ（肩傾きのばらつき）",
+        phase: "ascent",
+        region: "trunk",
+        value: tiltStd,
+        unit: "deg",
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, airFrom, airTo),
+          TRUNK_LANDMARKS
+        ),
+      });
+    }
   }
 
-  if (peakSegment) {
-    const peakFrame = findFrameAtOrNearestTime(frames, peakSegment.startTime);
-
+  // --- 最高点付近の肩の傾き ---
+  {
+    const peakFrame = frames[events.peakIndex];
     if (peakFrame && typeof peakFrame.shoulderTilt === "number") {
       pushFeature(features, {
         key: "peak.shoulderTilt",
         label: "最高点付近の肩の傾き",
         phase: "peak",
         region: "trunk",
-        value: peakFrame.shoulderTilt,
+        value: Math.abs(peakFrame.shoulderTilt),
         unit: "deg",
         confidence: calculateVisibilityConfidence([peakFrame], TRUNK_LANDMARKS),
       });
     }
+  }
 
-    if (
-      peakFrame &&
-      typeof peakFrame.leftKneeAngle === "number" &&
-      typeof peakFrame.rightKneeAngle === "number"
-    ) {
+  // --- 左右対称指数（踏切+着地の左右膝角度差の平均） ---
+  {
+    const asymmetry = meanKneeAsymmetry(frames, [
+      [events.sinkStartIndex, events.takeoffIndex],
+      [events.landingIndex, events.landingEndIndex],
+    ]);
+    if (asymmetry !== null) {
       pushFeature(features, {
-        key: "peak.kneeSymmetryDiff",
-        label: "最高点付近の左右膝角度差",
-        phase: "peak",
+        key: "symmetry.kneeDiff",
+        label: "左右膝差（踏切・着地）",
+        phase: "takeoff",
         region: "symmetry",
-        value: Math.abs(peakFrame.leftKneeAngle - peakFrame.rightKneeAngle),
+        value: asymmetry,
         unit: "deg",
-        confidence: calculateVisibilityConfidence([peakFrame], LOWER_BODY_LANDMARKS),
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, events.sinkStartIndex, events.takeoffIndex),
+          LOWER_BODY_LANDMARKS
+        ),
       });
     }
   }
 
-  if (contactSegment && centerYStats) {
-    const wristPeakTime = getWristPeakTime(frames);
-
-    if (wristPeakTime !== null) {
+  // --- 腕振り速度（沈み込み〜最高点の手首最大上向き速度、体幹長/秒） ---
+  {
+    const wristVelocityPx = maxWristUpwardVelocityPx(
+      frames,
+      events.sinkStartIndex,
+      events.peakIndex
+    );
+    if (wristVelocityPx !== null) {
       pushFeature(features, {
-        key: "contact.wristPeakToBodyPeakTimeDiff",
-        label: "打腕最高点と身体最高点の時間差",
-        phase: "contact",
+        key: "arm.swingVelocity",
+        label: "腕振り速度（上向き最大）",
+        phase: "takeoff",
         region: "arm",
-        value: wristPeakTime - centerYStats.min.time,
-        unit: "sec",
+        value: normalizeByBody(frames, wristVelocityPx),
+        unit: "normPxPerSec",
         confidence: calculateVisibilityConfidence(
-          getFramesInSegment(frames, contactSegment),
+          getSegmentFrames(frames, events.sinkStartIndex, events.peakIndex),
           ARM_LANDMARKS
         ),
       });
     }
   }
 
-  const hipStats = getSeriesStats(toSeries(frames, getAverageHipAngle));
+  // --- 打点タイミング（手首最高点と身体最高点の時間差） ---
+  {
+    let wristPeakTime: number | null = null;
+    let bestY = Number.POSITIVE_INFINITY;
+    for (let i = events.takeoffIndex; i <= events.landingIndex; i += 1) {
+      for (const wristIndex of [LEFT_WRIST, RIGHT_WRIST]) {
+        const wrist = frames[i].landmarks[wristIndex];
+        if (!wrist || (wrist.visibility ?? 1) < 0.5) continue;
+        if (wrist.y < bestY) {
+          bestY = wrist.y;
+          wristPeakTime = frames[i].time;
+        }
+      }
+    }
 
-  if (hipStats) {
+    if (wristPeakTime !== null) {
+      pushFeature(features, {
+        key: "contact.wristPeakToBodyPeakTimeDiff",
+        label: "打点タイミング（腕最高点−身体最高点）",
+        phase: "contact",
+        region: "arm",
+        value: wristPeakTime - times[events.peakIndex],
+        unit: "sec",
+        confidence: calculateVisibilityConfidence(
+          getSegmentFrames(frames, events.peakIndex, events.landingIndex),
+          ARM_LANDMARKS
+        ),
+      });
+    }
+  }
+
+  // --- 着地衝撃指数（着地直前の重心下降速度、体幹長/秒） ---
+  {
+    const preLanding = Math.max(events.peakIndex + 1, events.landingIndex - 1);
+    const velocity = events.comVelocity[preLanding];
+    if (velocity !== null && velocity > 0) {
+      pushFeature(features, {
+        key: "landing.impactIndex",
+        label: "着地衝撃指数（接地直前の下降速度）",
+        phase: "landing",
+        region: "lowerBody",
+        value: normalizeByBody(frames, velocity),
+        unit: "normPxPerSec",
+        confidence: calculateVisibilityConfidence(
+          landing
+            ? getSegmentFrames(frames, landing.startIndex, landing.endIndex)
+            : frames,
+          LOWER_BODY_LANDMARKS
+        ),
+      });
+    }
+  }
+
+  // --- 着地時の膝屈曲量（衝撃吸収の指標） ---
+  {
+    const landingFrames = getSegmentFrames(
+      frames,
+      events.landingIndex,
+      events.landingEndIndex
+    );
+    const kneeAtLanding = getAverageKneeAngle(frames[events.landingIndex]);
+    const minKnee = landingFrames.reduce<number | null>((min, f) => {
+      const knee = getAverageKneeAngle(f);
+      if (knee === null) return min;
+      return min === null || knee < min ? knee : min;
+    }, null);
+
+    if (kneeAtLanding !== null && minKnee !== null) {
+      pushFeature(features, {
+        key: "landing.kneeAbsorption",
+        label: "着地の膝屈曲量（衝撃吸収）",
+        phase: "landing",
+        region: "lowerBody",
+        value: Math.max(0, kneeAtLanding - minKnee),
+        unit: "deg",
+        confidence: calculateVisibilityConfidence(
+          landingFrames,
+          LOWER_BODY_LANDMARKS
+        ),
+      });
+    }
+  }
+
+  // --- 空中での水平移動（体幹長比） ---
+  if (airTo > airFrom) {
+    const dx = Math.abs(
+      events.comX[events.landingIndex] - events.comX[events.takeoffIndex]
+    );
     pushFeature(features, {
-      key: "takeoff.hipMinAngle",
-      label: "股関節角度の最小値",
-      phase: "takeoff",
-      region: "lowerBody",
-      value: hipStats.min.value,
-      unit: "deg",
-      confidence: calculateVisibilityConfidence(frames, LOWER_BODY_LANDMARKS),
+      key: "air.horizontalDrift",
+      label: "空中での水平移動",
+      phase: "ascent",
+      region: "centerOfMass",
+      value: normalizeByBody(frames, dx),
+      unit: "normPx",
+      confidence: calculateVisibilityConfidence(
+        getSegmentFrames(frames, events.takeoffIndex, events.landingIndex)
+      ),
     });
   }
+
+  // --- 重心上昇量（体幹長比） ---
+  pushFeature(features, {
+    key: "center.verticalRange",
+    label: "重心の上昇量",
+    phase: "ascent",
+    region: "centerOfMass",
+    value: normalizeByBody(frames, events.risePx),
+    unit: "normPx",
+    confidence: calculateVisibilityConfidence(frames),
+  });
 
   return features;
 }

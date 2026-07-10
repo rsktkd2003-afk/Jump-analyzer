@@ -84,6 +84,20 @@ export function getSeriesStats(points: SeriesPoint[]): SeriesStats | null {
   };
 }
 
+/** null混じり系列の標準偏差（有効値が2未満ならnull） */
+export function stdDev(values: Array<number | null>): number | null {
+  const valid = values.filter(
+    (v): v is number => typeof v === "number" && Number.isFinite(v)
+  );
+  if (valid.length < 2) return null;
+
+  const mean = valid.reduce((sum, v) => sum + v, 0) / valid.length;
+  const variance =
+    valid.reduce((sum, v) => sum + (v - mean) * (v - mean), 0) / valid.length;
+
+  return Math.sqrt(variance);
+}
+
 export function findFrameAtOrNearestTime(
   frames: TrackedFrame[],
   time: number
