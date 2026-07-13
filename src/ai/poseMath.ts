@@ -70,6 +70,20 @@ export function calculateTiltDegrees(from: Point2D, to: Point2D): number {
 }
 
 /**
+ * 2点を結ぶ直線と「画面上の水平線」がなす角度を、0〜90°へ正規化して返す。
+ * MediaPipeはY座標が下方向へ増加する座標系のため、Math.atan2(dy, dx) で
+ * 得られる角度をそのまま使わず、鋭角（0〜90°）へ畳み込む。
+ * 左右反転（利き手やカメラの向き）や上下反転の影響を受けない。
+ */
+export function calculateLineAngleFromHorizontal(from: Point2D, to: Point2D): number {
+  const deltaX = to.x - from.x;
+  const deltaY = to.y - from.y;
+  const radians = Math.atan2(deltaY, deltaX);
+  const degrees = Math.abs(radians * RADIANS_TO_DEGREES);
+  return degrees > 90 ? 180 - degrees : degrees;
+}
+
+/**
  * 単純移動平均。MediaPipeの1フレーム単位の微小な座標ブレを吸収するために使う。
  * 端では利用可能な範囲だけでウィンドウを縮めて計算する（対称ウィンドウ）。
  */

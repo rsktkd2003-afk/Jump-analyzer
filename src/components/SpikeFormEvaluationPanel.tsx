@@ -5,6 +5,7 @@ import {
   formatMetricValue,
   type SpikeArmForm,
   type SpikeFormEvaluationResult,
+  type StarRating,
 } from "../ai/spikeFormEvaluation";
 import type { TrackedFrame } from "../ai/trackingAnalyzer";
 
@@ -131,7 +132,12 @@ function EvaluationResultView({ result }: { result: SpikeFormEvaluationResult })
             <details key={category.id} style={categoryStyle}>
               <summary style={summaryStyle}>
                 <span>{category.label}</span>
-                <strong>{formatScore(category.score)}</strong>
+                <span style={{ textAlign: "right" }}>
+                  <strong>{formatScore(category.score)}</strong>
+                  {category.id === "airPosture" && (
+                    <div style={starsStyle}>{formatStars(result.aerialPostureStars)}</div>
+                  )}
+                </span>
               </summary>
               {category.id === "landing" && (
                 <p style={smallTextStyle}>
@@ -164,6 +170,12 @@ function EvaluationResultView({ result }: { result: SpikeFormEvaluationResult })
 
 function formatScore(score: number | null): string {
   return score === null ? "—" : `${Math.round(score)}点`;
+}
+
+/** 空中姿勢スコアの星表示。result.aerialPostureStars（scoreToStarsの結果）だけを参照する */
+function formatStars(stars: StarRating | null): string {
+  if (stars === null) return "";
+  return "★".repeat(stars) + "☆".repeat(5 - stars);
 }
 
 const cardStyle: React.CSSProperties = {
@@ -274,4 +286,10 @@ const smallTextStyle: React.CSSProperties = {
   fontSize: 12,
   color: "#777",
   lineHeight: 1.5,
+};
+
+const starsStyle: React.CSSProperties = {
+  color: "#e09f3e",
+  fontSize: 13,
+  letterSpacing: 1,
 };

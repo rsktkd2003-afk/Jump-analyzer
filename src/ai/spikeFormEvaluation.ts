@@ -4,9 +4,18 @@ import {
   runJumpPhaseEngine,
   type EnginePhaseName,
 } from "./jumpPhaseEngine";
-import { calculateAngle, calculateTiltDegrees, clamp, distance } from "./poseMath";
+import {
+  calculateAngle,
+  calculateLineAngleFromHorizontal,
+  calculateTiltDegrees,
+  clamp,
+  distance,
+} from "./poseMath";
 
 export type SpikeArmForm = "straightArm" | "bowAndArrow" | "circularArm";
+
+/** スコア(0〜100)から星評価への変換結果。空中姿勢スコアの表示に使う */
+export type StarRating = 1 | 2 | 3 | 4 | 5;
 
 export type EvaluationCategoryId =
   | "approach"
@@ -47,6 +56,10 @@ export type SpikeFormEvaluationResult = {
   categories: EvaluationCategory[];
   priorityMetrics: EvaluationMetric[];
   note: string;
+  /** 空中姿勢カテゴリのスコア（airPostureカテゴリのscoreと同一の値。二重計算はしない） */
+  aerialPostureScore: number | null;
+  /** 空中姿勢スコアを星評価へ変換したもの。画面の星表示は必ずこの値を参照する */
+  aerialPostureStars: StarRating | null;
 };
 
 type Target = {
@@ -334,11 +347,11 @@ function wristSpeeds(ctx: EvaluationContext, index: number): Array<{ frame: Trac
 // ---------------------------------------------------------------
 // 空中姿勢（airPosture）評価専用のヘルパー。
 // 「体幹の垂直度」ではなく、最高点付近における
-// 「打つ側の肩→反対側の足先」の全身ラインの一直線性と、
-// そのラインが水平線に対して理想角度（45°）に近いかを評価する。
+//   1) 「打つ側の肩→反対側の足先」の全身ラインの一直線性（45%）
+//   2) そのラインが水平線に対して理想角度45°に近いか（35%）
+//   3) 最高点付近で体軸（肩中心-腰中心）の角度がどれだけ安定しているか（20%）
+// の3要素だけで評価する。体幹・肩の「絶対的な傾き」自体は減点しない。
 // ---------------------------------------------------------------
-
-const RAD2DEG = 180 / Math.PI;
 
 type Side = "left" | "right";
 
@@ -353,20 +366,48 @@ const ALIGNMENT_GOOD_MAX = 0.08;
 const ALIGNMENT_FAIR_MAX = 0.13;
 const ALIGNMENT_POOR_SPAN = 0.09;
 
-/** 45°評価：水平線に対する理想角度と許容偏差バンド（度） */
+/** 45°評価：水平線に対する理想角度と許容偏差バンド（度）。40〜50°を必ず理想（>=90点）に含める */
 const ANGLE_IDEAL_DEG = 45;
 const ANGLE_IDEAL_TOLERANCE_DEG = 5;
 const ANGLE_GOOD_TOLERANCE_DEG = 10;
 const ANGLE_FAIR_TOLERANCE_DEG = 20;
 const ANGLE_POOR_SPAN_DEG = 20;
 
-/** 空中姿勢スコアの内訳比率（一直線性60% + 45°評価40%） */
-const AERIAL_ALIGNMENT_WEIGHT = 0.6;
-const AERIAL_ANGLE_WEIGHT = 0.4;
+/** 体幹安定性：最高点付近の連続フレーム間の体軸角度変化量（中央値, deg）の評価バンド境界 */
+const TRUNK_STABILITY_EXCELLENT_MAX_DEG = 4;
+const TRUNK_STABILITY_GOOD_MAX_DEG = 8;
+const TRUNK_STABILITY_FAIR_MAX_DEG = 13;
+const TRUNK_STABILITY_POOR_SPAN_DEG = 15;
+
+/** 空中姿勢スコアの内訳比率（一直線性45% + 45°評価35% + 体幹安定性20%） */
+export const AERIAL_ALIGNMENT_WEIGHT = 0.45;
+export const AERIAL_ANGLE_WEIGHT = 0.35;
+export const AERIAL_TRUNK_STABILITY_WEIGHT = 0.2;
 
 /** コメント切り替えのスコア閾値 */
 const AERIAL_GOOD_SCORE = 80;
 const AERIAL_POOR_SCORE = 50;
+
+/** スコア(0〜100)→星評価(1〜5)への変換しきい値。空中姿勢の星表示はここだけで決める */
+const STAR_SCORE_THRESHOLDS: Record<Exclude<StarRating, 1>, number> = {
+  5: 90,
+  4: 75,
+  3: 60,
+  2: 40,
+};
+
+/**
+ * スコア(0〜100)を星評価(1〜5)へ変換する唯一の関数。
+ * アプリ内の他の星評価（analysis/evaluation.ts）とは独立した空中姿勢専用の変換で、
+ * 呼び出し側はこの関数の戻り値だけを画面に表示すること（別のscore/ratingを混在させない）。
+ */
+export function scoreToStars(score: number): StarRating {
+  if (score >= STAR_SCORE_THRESHOLDS[5]) return 5;
+  if (score >= STAR_SCORE_THRESHOLDS[4]) return 4;
+  if (score >= STAR_SCORE_THRESHOLDS[3]) return 3;
+  if (score >= STAR_SCORE_THRESHOLDS[2]) return 2;
+  return 1;
+}
 
 /** 利き手（打つ側）に応じた「肩→対角の腰・膝・足先／足首」のランドマーク */
 function aerialOppositeLandmarks(side: Side) {
@@ -378,7 +419,7 @@ function aerialOppositeLandmarks(side: Side) {
 type AerialLineSample = {
   /** 基準線（肩→対角足先）からの腰・膝の垂直距離の平均を、基準線の長さで正規化した値。小さいほど一直線 */
   alignmentRatio: number;
-  /** 基準線と水平線のなす角（deg）。45が理想。符号は反転した姿勢を誤検出しないために残す */
+  /** 基準線と水平線のなす角（0〜90deg）。45が理想 */
   angleDeg: number;
 };
 
@@ -407,6 +448,7 @@ function dominantHittingSide(frames: TrackedFrame[]): Side | null {
 /**
  * 最高点フレームを中心に、フレームレートに関わらず一定時間幅（前後 AERIAL_POSTURE_WINDOW_SEC 秒）
  * だけを対象にする。takeoff/landingの範囲外や、助走・テイクバック・フォロースルー後は含まれない。
+ * 一直線性・45°評価・体幹安定性の3指標はすべてこの同じウィンドウを使う（評価対象のズレを防ぐ）。
  */
 function aerialPostureWindowFrames(ctx: EvaluationContext): TrackedFrame[] {
   const peakFrame = eventFrame(ctx, "peakIndex");
@@ -441,9 +483,8 @@ function computeAerialLineSample(frame: TrackedFrame, side: Side): AerialLineSam
 
   const alignmentRatio = (perpendicularDistance(hip) + perpendicularDistance(knee)) / 2 / baselineLength;
 
-  // dxの符号（カメラの向き・利き手による左右反転）には依存させず、dyの符号だけを残す。
-  // こうすることで「上下が反転した姿勢」を誤って理想角度扱いしない。
-  const angleDeg = Math.atan2(dy, Math.abs(dx)) * RAD2DEG;
+  // 水平線との角度は共通ユーティリティ（0〜90°へ正規化済み）を使い、重複実装しない。
+  const angleDeg = calculateLineAngleFromHorizontal(shoulder, foot);
 
   return { alignmentRatio, angleDeg };
 }
@@ -459,8 +500,40 @@ function aerialPostureSamples(ctx: EvaluationContext): AerialLineSample[] {
     .filter((s): s is AerialLineSample => s !== null);
 }
 
+/**
+ * 最高点付近（aerialPostureWindowFramesと同じ区間）の体軸角度（肩中心-腰中心の傾き, deg）の列。
+ * 絶対角度そのものではなく、後続で「連続フレーム間の変化量」を見るための系列。
+ */
+function trunkAxisAngleSeries(ctx: EvaluationContext): number[] {
+  const frames = aerialPostureWindowFrames(ctx);
+  return frames
+    .map((frame) => {
+      const s = shoulderCenter(frame);
+      const h = hipCenter(frame);
+      return s && h ? calculateTiltDegrees(h, s) : null;
+    })
+    .filter((v): v is number => v !== null);
+}
+
+/**
+ * 体幹安定性の指標＝連続フレーム間の体軸角度変化量の中央値（deg）。
+ * 外れ値（1フレームだけの検出ブレ）の影響を抑えつつ、
+ * 「40°傾いたまま維持」なら差分はほぼ0（高評価）、
+ * 「短時間で乱高下」すれば差分の中央値が大きくなる（低評価）ように設計している。
+ * 体軸の絶対角度（40°など）自体はこの値に一切影響しない。
+ */
+function trunkStabilityVariation(ctx: EvaluationContext): number | null {
+  const series = trunkAxisAngleSeries(ctx);
+  if (series.length < AERIAL_POSTURE_MIN_SAMPLES) return null;
+  const diffs: number[] = [];
+  for (let i = 1; i < series.length; i += 1) {
+    diffs.push(Math.abs(series[i] - series[i - 1]));
+  }
+  return median(diffs);
+}
+
 /** 一直線性（0が理想、大きいほど崩れている）を0〜100へ区分線形変換する */
-function scoreAerialAlignment(value: number): number {
+export function scoreAerialAlignment(value: number): number {
   if (value <= ALIGNMENT_EXCELLENT_MAX) {
     return 100 - (value / ALIGNMENT_EXCELLENT_MAX) * 10;
   }
@@ -476,9 +549,12 @@ function scoreAerialAlignment(value: number): number {
   return 45 - t * 45;
 }
 
-/** 45°からの偏差を0〜100へ区分線形変換する */
-function scoreAerialAngle(rawAngleDeg: number): number {
-  const deviation = Math.abs(rawAngleDeg - ANGLE_IDEAL_DEG);
+/**
+ * 45°からの偏差を0〜100へ区分線形変換する。
+ * 40°・50°は境界値として必ず理想帯（deviation<=5 → 90点以上）に含まれる（<=を使用）。
+ */
+export function scoreAerialAngle(normalizedAngleDeg: number): number {
+  const deviation = Math.abs(normalizedAngleDeg - ANGLE_IDEAL_DEG);
   if (deviation <= ANGLE_IDEAL_TOLERANCE_DEG) {
     const t = deviation / ANGLE_IDEAL_TOLERANCE_DEG;
     return 100 - t * 10;
@@ -493,6 +569,26 @@ function scoreAerialAngle(rawAngleDeg: number): number {
   }
   const t = clamp((deviation - ANGLE_FAIR_TOLERANCE_DEG) / ANGLE_POOR_SPAN_DEG, 0, 1);
   return 40 - t * 40;
+}
+
+/** 体幹安定性（角度変化量の中央値。0が理想、大きいほど不安定）を0〜100へ区分線形変換する */
+export function scoreTrunkStability(variationDeg: number): number {
+  if (variationDeg <= TRUNK_STABILITY_EXCELLENT_MAX_DEG) {
+    return 100 - (variationDeg / TRUNK_STABILITY_EXCELLENT_MAX_DEG) * 10;
+  }
+  if (variationDeg <= TRUNK_STABILITY_GOOD_MAX_DEG) {
+    const t =
+      (variationDeg - TRUNK_STABILITY_EXCELLENT_MAX_DEG) /
+      (TRUNK_STABILITY_GOOD_MAX_DEG - TRUNK_STABILITY_EXCELLENT_MAX_DEG);
+    return 90 - t * 15;
+  }
+  if (variationDeg <= TRUNK_STABILITY_FAIR_MAX_DEG) {
+    const t =
+      (variationDeg - TRUNK_STABILITY_GOOD_MAX_DEG) / (TRUNK_STABILITY_FAIR_MAX_DEG - TRUNK_STABILITY_GOOD_MAX_DEG);
+    return 75 - t * 30;
+  }
+  const t = clamp((variationDeg - TRUNK_STABILITY_FAIR_MAX_DEG) / TRUNK_STABILITY_POOR_SPAN_DEG, 0, 1);
+  return 45 - t * 45;
 }
 
 function describeAerialAlignment(_value: number, score: number): string {
@@ -513,6 +609,16 @@ function describeAerialAngle(rawAngleDeg: number, score: number): string {
     return "全身のラインが水平に近く、理想とする45°より浅い姿勢です。";
   }
   return "全身のラインが立ちすぎており、理想とする45°より大きくなっています。";
+}
+
+function describeTrunkStability(_value: number, score: number): string {
+  if (score >= AERIAL_GOOD_SCORE) {
+    return "最高点付近で体軸が安定しています。傾き自体は減点していません。";
+  }
+  if (score <= AERIAL_POOR_SCORE) {
+    return "最高点付近で体軸の角度が短時間で大きく変化しており、姿勢が不安定です。";
+  }
+  return "最高点付近の体軸はおおむね安定していますが、やや変化が見られます。";
 }
 
 const metricDefinitions: MetricDefinition[] = [
@@ -1073,6 +1179,19 @@ const metricDefinitions: MetricDefinition[] = [
     },
   },
   {
+    id: "aerialTrunkStability",
+    label: "最高点付近の体幹安定性",
+    category: "airPosture",
+    unit: "deg",
+    weight: AERIAL_TRUNK_STABILITY_WEIGHT,
+    phase: "peak",
+    description: "体幹または下半身の検出精度が低いため、体幹安定性を正確に評価できませんでした。",
+    targetByForm: formTargets({ ideal: 0, tolerance: TRUNK_STABILITY_FAIR_MAX_DEG }),
+    score: (value) => scoreTrunkStability(value),
+    describe: describeTrunkStability,
+    measure: (ctx) => trunkStabilityVariation(ctx),
+  },
+  {
     id: "followThroughRange",
     label: "腕振り切り",
     category: "followThrough",
@@ -1516,6 +1635,13 @@ export function evaluateSpikeForm(frames: TrackedFrame[], selectedForm: SpikeArm
     .sort((a, b) => (a.score ?? 100) - (b.score ?? 100))
     .slice(0, 5);
 
+  // 空中姿勢スコア・星評価は airPosture カテゴリの score をそのまま使う（別箇所での再計算はしない）。
+  const airPostureCategory = categories.find((c) => c.id === "airPosture") ?? null;
+  const aerialPostureScore = airPostureCategory?.score ?? null;
+  const aerialPostureStars = aerialPostureScore === null ? null : scoreToStars(aerialPostureScore);
+
+  logAerialPostureDebug(ctx, airPostureCategory, aerialPostureScore, aerialPostureStars);
+
   return {
     selectedForm,
     selectedFormLabel: FORM_LABELS[selectedForm],
@@ -1524,7 +1650,40 @@ export function evaluateSpikeForm(frames: TrackedFrame[], selectedForm: SpikeArm
     categories,
     priorityMetrics,
     note: "この評価は通常動画の2D姿勢推定から数値化できる項目だけで採点しています。力感・力み・指先への力伝達などの感覚項目は含めていません。",
+    aerialPostureScore,
+    aerialPostureStars,
   };
+}
+
+/**
+ * 開発環境専用のデバッグ出力。40°が星1になるような回帰を早期発見できるよう、
+ * 測定値→スコア→星評価までの内訳を一括で確認できるようにする。
+ * 本番ビルド（import.meta.env.DEV === false）では何も出力しない。
+ */
+function logAerialPostureDebug(
+  ctx: EvaluationContext,
+  airPostureCategory: EvaluationCategory | null,
+  aerialPostureScore: number | null,
+  aerialPostureStars: StarRating | null
+): void {
+  if (!import.meta.env.DEV) return;
+  if (!airPostureCategory) return;
+
+  const peakFrame = eventFrame(ctx, "peakIndex");
+  const byId = (id: string) => airPostureCategory.metrics.find((m) => m.id === id) ?? null;
+
+  console.debug("[airPosture]", {
+    peakFrameIndex: ctx.engine.events.peakIndex,
+    peakFrameTime: peakFrame?.time ?? null,
+    lineAngleDeg: byId("aerialLineAngle")?.value ?? null,
+    lineAngleScore: byId("aerialLineAngle")?.score ?? null,
+    alignmentRatio: byId("aerialLineAlignment")?.value ?? null,
+    alignmentScore: byId("aerialLineAlignment")?.score ?? null,
+    trunkStabilityVariationDeg: byId("aerialTrunkStability")?.value ?? null,
+    trunkStabilityScore: byId("aerialTrunkStability")?.score ?? null,
+    aerialPostureScore,
+    aerialPostureStars,
+  });
 }
 
 function weightedScore(items: Array<{ score: number | null; weight: number; confidence?: number }>): number | null {
