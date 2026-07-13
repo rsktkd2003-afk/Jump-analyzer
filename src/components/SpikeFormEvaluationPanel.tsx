@@ -1,9 +1,5 @@
 import { useMemo } from "react";
 
-import type { CaptureSettings } from "./captureSettings";
-import { DEFAULT_CAPTURE_SETTINGS } from "./captureSettings";
-import { getCaptureConfidenceFactor } from "./captureConfidence";
-
 import {
   evaluateSpikeForm,
   formatMetricValue,
@@ -137,6 +133,11 @@ function EvaluationResultView({ result }: { result: SpikeFormEvaluationResult })
                 <span>{category.label}</span>
                 <strong>{formatScore(category.score)}</strong>
               </summary>
+              {category.id === "landing" && (
+                <p style={smallTextStyle}>
+                  ※参考評価（安全性チェック）です。スパイクスコアには含まれません。
+                </p>
+              )}
               <div style={{ marginTop: 8 }}>
                 {category.metrics.map((metric) => (
                   <div key={metric.id} style={metricRowStyle}>

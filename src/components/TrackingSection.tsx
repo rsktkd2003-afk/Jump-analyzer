@@ -3,7 +3,10 @@ import { useState } from "react";
 import TrackingCanvas from "./TrackingCanvas";
 import TrackingInfoCard from "./TrackingInfoCard";
 import MotionGraph from "./MotionGraph";
-import ReferenceComparisonPanel from "./ReferenceComparisonPanel";
+// 動画比較機能（参考動画とのモーション比較）は通常の解析フローから切り離し中。
+// 再接続する場合は ReferenceComparisonPanel をここでimportし、
+// トラッキング結果表示の末尾で <ReferenceComparisonPanel userFrames={trackedFrames} fps={fps} /> を描画する。
+// コンポーネント本体・ロジック（ReferenceComparisonPanel.tsx / comparisonAnalyzer.ts）は削除していない。
 
 import JumpPhasePanel from "./JumpPhasePanel";
 import MotionFingerprint from "./MotionFingerprint";
@@ -136,8 +139,6 @@ export default function TrackingSection({
           <MotionFingerprint frames={trackedFrames} />
 
           <MotionHistoryPanel frames={trackedFrames} />
-
-          <ReferenceComparisonPanel userFrames={trackedFrames} fps={fps} />
         </>
       )}
     </section>
