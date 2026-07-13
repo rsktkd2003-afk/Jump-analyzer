@@ -22,6 +22,15 @@ export type FeatureEvaluation = {
 
 const NOSE = 0;
 
+// --- 空中姿勢（体幹・肩）関連の定数 ---
+// 体幹の「垂直度」ではなく「打点前後での体軸の変化量」で評価するため、
+// ここでの値は角度差・ばらつきの大きさであり、傾き自体の大小ではない。
+const TRUNK_STABILITY_THRESHOLDS: [number, number, number, number] = [2.5, 4.5, 7, 11];
+/** 打つ側の肩が高いことを理想とする角度。逆方向のみ減点対象とする */
+const SHOULDER_TILT_IDEAL_DEG = 6;
+/** 逆方向に傾いた場合の減点しきい値（★3・★2の境界） */
+const SHOULDER_TILT_REVERSE_THRESHOLDS: [number, number] = [4, 8];
+
 /** 「小さいほど良い」指標：値が閾値の何番目に収まるかで★を決める */
 function starsLowerIsBetter(
   value: number,
@@ -54,6 +63,24 @@ function starsInRange(
 ): StarRating {
   const diff = Math.abs(value - center);
   return starsLowerIsBetter(diff, tolerances);
+}
+
+/**
+ * 「理想方向は許容範囲を広く取り、逆方向のみ減点する」指標。
+ * 例：打つ側の肩が高い（正）のは自然なフォームなので減点せず、
+ * 逆方向（負）に傾いている場合のみ★を落とす。
+ */
+function starsAsymmetricDirection(
+  value: number,
+  idealValue: number,
+  reverseThresholds: [number, number]
+): StarRating {
+  if (value >= idealValue) return 5;
+  if (value >= 0) return 4;
+  const magnitude = Math.abs(value);
+  if (magnitude <= reverseThresholds[0]) return 3;
+  if (magnitude <= reverseThresholds[1]) return 2;
+  return 1;
 }
 
 function starsText(stars: StarRating): string {
@@ -117,15 +144,21 @@ export function evaluateFeature(feature: Feature): FeatureEvaluation | null {
     }
 
     case "peak.shoulderTilt": {
-      const stars = starsLowerIsBetter(v, [5, 8, 12, 18]);
-      if (stars >= 4) return build(stars, "空中で体幹が安定しています。");
-      return build(stars, "最高点で肩が傾いています。体幹を締めてまっすぐ跳ぶ意識を持ちましょう。");
+      // v: 打つ側の肩が高いほど正（理想方向）、逆方向へ傾くほど負。
+      // 肩が水平＝理想ではないため、正方向はほぼ減点しない。
+      const stars = starsAsymmetricDirection(v, SHOULDER_TILT_IDEAL_DEG, SHOULDER_TILT_REVERSE_THRESHOLDS);
+      if (v < 0) return build(stars, "打つ側と逆に肩が傾いています。打点前に打つ側の肩を高く保つ意識を持ちましょう。");
+      if (stars >= 4) return build(stars, "肩の傾きは理想に近いです。打つ側の肩が適度に高く使えています。");
+      return build(stars, "肩の傾きはおおむね良好です。");
     }
 
     case "air.postureStability": {
-      const stars = starsLowerIsBetter(v, [3, 5, 8, 12]);
-      if (stars >= 4) return build(stars, "空中姿勢のブレが小さく安定しています。");
-      return build(stars, "空中で姿勢が揺れています。踏切時の体幹の締めを意識してください。");
+      // 打点前後（インパクト周辺）の体幹傾きを平滑化した上でのばらつき。
+      // 体幹が傾いていること自体ではなく、区間内で角度が安定しているかを見る。
+      const stars = starsLowerIsBetter(v, TRUNK_STABILITY_THRESHOLDS);
+      if (stars >= 4) return build(stars, "体軸は安定しています。打点前後でも姿勢が維持できています。");
+      if (stars <= 2) return build(stars, "空中で体軸変化が大きく見られます。踏切時の体幹の締めを意識してください。");
+      return build(stars, "打点前後でやや体軸が揺れています。");
     }
 
     case "air.timeSec": {

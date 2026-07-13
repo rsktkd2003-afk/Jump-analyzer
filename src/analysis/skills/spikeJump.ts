@@ -8,9 +8,11 @@
 import type { TrackedFrame } from "../../ai/poseAnalyzer";
 import {
   findEnginePhase,
+  getImpactWindowFrames,
   runJumpPhaseEngine,
   type JumpPhaseEngineResult,
 } from "../../ai/jumpPhaseEngine";
+import { movingAverage } from "../../ai/poseMath";
 import type { Feature, PhaseSegment, SkillDefinition } from "../types";
 import {
   average,
@@ -21,11 +23,18 @@ import {
   toSeries,
 } from "../utils";
 
+const LEFT_SHOULDER = 11;
+const RIGHT_SHOULDER = 12;
 const LEFT_WRIST = 15;
 const RIGHT_WRIST = 16;
 const LOWER_BODY_LANDMARKS = [23, 24, 25, 26, 27, 28];
 const TRUNK_LANDMARKS = [11, 12, 23, 24];
 const ARM_LANDMARKS = [11, 12, 13, 14, 15, 16];
+
+/** 空中姿勢（打点前後の体軸・肩傾き）を判定する際の可視性しきい値 */
+const AIR_POSTURE_MIN_VISIBILITY = 0.5;
+/** 打点前後の角度系列に対する移動平均ウィンドウ（フレーム数） */
+const AIR_POSTURE_SMOOTHING_WINDOW = 3;
 
 function getAverageKneeAngle(frame: TrackedFrame): number | null {
   const values = [frame.leftKneeAngle, frame.rightKneeAngle].filter(
@@ -150,6 +159,53 @@ function meanKneeAsymmetry(
   }
 
   return average(diffs);
+}
+
+/** 区間内で最も高く上がった手首から打つ側を判定する（1フレームのブレに依存しない） */
+function determineHittingSide(frames: TrackedFrame[]): "left" | "right" | null {
+  let side: "left" | "right" | null = null;
+  let bestY = Number.POSITIVE_INFINITY;
+
+  for (const frame of frames) {
+    for (const [wristIndex, candidate] of [
+      [LEFT_WRIST, "left"],
+      [RIGHT_WRIST, "right"],
+    ] as const) {
+      const wrist = frame.landmarks[wristIndex];
+      if (!wrist || (wrist.visibility ?? 1) < AIR_POSTURE_MIN_VISIBILITY) continue;
+      if (wrist.y < bestY) {
+        bestY = wrist.y;
+        side = candidate;
+      }
+    }
+  }
+
+  return side;
+}
+
+/**
+ * 打つ側の肩が高いほど正になる、符号付きの肩ライン角度（deg）。
+ * 0＝水平、正＝打つ側の肩が高い（理想方向）、負＝逆方向。
+ */
+function shoulderTiltForHittingSide(
+  frame: TrackedFrame,
+  side: "left" | "right"
+): number | null {
+  const left = frame.landmarks[LEFT_SHOULDER];
+  const right = frame.landmarks[RIGHT_SHOULDER];
+  if (!left || !right) return null;
+  if (
+    (left.visibility ?? 1) < AIR_POSTURE_MIN_VISIBILITY ||
+    (right.visibility ?? 1) < AIR_POSTURE_MIN_VISIBILITY
+  ) {
+    return null;
+  }
+
+  const width = Math.hypot(right.x - left.x, right.y - left.y);
+  if (width <= 0) return null;
+
+  const raisedPx = side === "right" ? left.y - right.y : right.y - left.y;
+  return (Math.atan2(raisedPx, width) * 180) / Math.PI;
 }
 
 function extractSpikeJump(
@@ -316,42 +372,52 @@ function extractSpikeJump(
     });
   }
 
-  // --- 空中姿勢安定度（肩傾きの標準偏差。小さいほど安定） ---
-  if (airTo > airFrom) {
-    const tiltStd = stdDev(
-      getSegmentFrames(frames, airFrom, airTo).map((f) =>
-        typeof f.shoulderTilt === "number" ? Math.abs(f.shoulderTilt) : null
-      )
+  // --- 空中姿勢安定度（打点前後の体幹傾き系列を平滑化した上でのばらつき。小さいほど安定） ---
+  // 助走やテイクバックを含む「空中全体」ではなく、打点前後（インパクト周辺）のみを評価する。
+  const impactFrames = getImpactWindowFrames(frames, engine);
+  {
+    const smoothedTilts = movingAverage(
+      impactFrames
+        .map((f) => (typeof f.shoulderTilt === "number" ? f.shoulderTilt : null))
+        .filter((v): v is number => v !== null),
+      AIR_POSTURE_SMOOTHING_WINDOW
     );
+    const tiltStd = stdDev(smoothedTilts);
     if (tiltStd !== null) {
       pushFeature(features, {
         key: "air.postureStability",
         label: "空中姿勢の揺れ（肩傾きのばらつき）",
-        phase: "ascent",
+        phase: "peak",
         region: "trunk",
         value: tiltStd,
         unit: "deg",
-        confidence: calculateVisibilityConfidence(
-          getSegmentFrames(frames, airFrom, airTo),
-          TRUNK_LANDMARKS
-        ),
+        confidence: calculateVisibilityConfidence(impactFrames, TRUNK_LANDMARKS),
       });
     }
   }
 
-  // --- 最高点付近の肩の傾き ---
+  // --- 最高点付近の肩の傾き（打つ側の肩が高いほど自然。逆方向のみ注意すべき） ---
   {
-    const peakFrame = frames[events.peakIndex];
-    if (peakFrame && typeof peakFrame.shoulderTilt === "number") {
-      pushFeature(features, {
-        key: "peak.shoulderTilt",
-        label: "最高点付近の肩の傾き",
-        phase: "peak",
-        region: "trunk",
-        value: Math.abs(peakFrame.shoulderTilt),
-        unit: "deg",
-        confidence: calculateVisibilityConfidence([peakFrame], TRUNK_LANDMARKS),
-      });
+    const side = determineHittingSide(impactFrames);
+    if (side) {
+      const smoothedBalance = movingAverage(
+        impactFrames
+          .map((f) => shoulderTiltForHittingSide(f, side))
+          .filter((v): v is number => v !== null),
+        AIR_POSTURE_SMOOTHING_WINDOW
+      );
+      const value = average(smoothedBalance);
+      if (value !== null) {
+        pushFeature(features, {
+          key: "peak.shoulderTilt",
+          label: "最高点付近の肩の傾き",
+          phase: "peak",
+          region: "trunk",
+          value,
+          unit: "deg",
+          confidence: calculateVisibilityConfidence(impactFrames, TRUNK_LANDMARKS),
+        });
+      }
     }
   }
 

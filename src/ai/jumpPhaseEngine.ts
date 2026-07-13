@@ -20,6 +20,9 @@ const RIGHT_WRIST = 16;
 /** 打球フェーズの最大長（秒）。スパイクのインパクトは瞬間的 */
 const MAX_CONTACT_DURATION_SEC = 0.12;
 
+/** 「打点前後」の判定窓を最高点フェーズ開始から何フレーム遡って含めるか */
+const IMPACT_WINDOW_LOOKBACK_FRAMES = 2;
+
 export type EnginePhaseName =
   | "approach"
   | "takeoff"
@@ -146,4 +149,26 @@ export function findEnginePhase(
   name: EnginePhaseName
 ): EnginePhase | null {
   return result.phases.find((phase) => phase.name === name) ?? null;
+}
+
+/**
+ * 「打点前後（インパクト周辺）」のフレームだけを返す。
+ * 最高点フェーズ開始の少し前〜打球フェーズ終了までに限定し、
+ * 助走・テイクバック・着地など空中姿勢の評価と無関係な区間を除外する。
+ */
+export function getImpactWindowFrames(
+  frames: TrackedFrame[],
+  result: JumpPhaseEngineResult
+): TrackedFrame[] {
+  const peak = findEnginePhase(result, "peak");
+  if (!peak) return [];
+  const contact = findEnginePhase(result, "contact");
+
+  const start = Math.max(
+    result.events.takeoffIndex,
+    peak.startIndex - IMPACT_WINDOW_LOOKBACK_FRAMES
+  );
+  const end = contact ? contact.endIndex : peak.endIndex;
+
+  return frames.slice(start, end + 1);
 }

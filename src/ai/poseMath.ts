@@ -68,3 +68,19 @@ export function angleOrNull(
 export function calculateTiltDegrees(from: Point2D, to: Point2D): number {
   return Math.atan2(to.y - from.y, to.x - from.x) * RADIANS_TO_DEGREES;
 }
+
+/**
+ * 単純移動平均。MediaPipeの1フレーム単位の微小な座標ブレを吸収するために使う。
+ * 端では利用可能な範囲だけでウィンドウを縮めて計算する（対称ウィンドウ）。
+ */
+export function movingAverage(values: number[], windowSize: number): number[] {
+  if (windowSize <= 1 || values.length === 0) return values;
+
+  const half = Math.floor(windowSize / 2);
+  return values.map((_, i) => {
+    const start = Math.max(0, i - half);
+    const end = Math.min(values.length, i + half + 1);
+    const slice = values.slice(start, end);
+    return slice.reduce((sum, v) => sum + v, 0) / slice.length;
+  });
+}

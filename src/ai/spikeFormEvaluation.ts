@@ -1,6 +1,11 @@
 import type { TrackedFrame, TrackedLandmark } from "./trackingAnalyzer";
-import { findEnginePhase, runJumpPhaseEngine, type EnginePhaseName } from "./jumpPhaseEngine";
-import { calculateAngle, calculateTiltDegrees, clamp, distance } from "./poseMath";
+import {
+  findEnginePhase,
+  getImpactWindowFrames,
+  runJumpPhaseEngine,
+  type EnginePhaseName,
+} from "./jumpPhaseEngine";
+import { calculateAngle, calculateTiltDegrees, clamp, distance, movingAverage } from "./poseMath";
 
 export type SpikeArmForm = "straightArm" | "bowAndArrow" | "circularArm";
 
@@ -61,6 +66,10 @@ type MetricDefinition = {
   description: string;
   targetByForm: Record<SpikeArmForm, Target>;
   measure: (ctx: EvaluationContext) => number | null;
+  /** 未指定時は標準の scoreValue（ideal/tolerance/directionベース）を使う */
+  score?: (value: number, target: Target) => number;
+  /** 判定理由を値に応じて動的に生成する。未指定時は静的な description を使う */
+  describe?: (value: number, score: number) => string;
 };
 
 type EvaluationContext = {
@@ -321,6 +330,126 @@ function wristSpeeds(ctx: EvaluationContext, index: number): Array<{ frame: Trac
     values.push({ frame: ctx.frames[i], speed: distance(a, b) / dt });
   }
   return values;
+}
+
+// ---------------------------------------------------------------
+// 空中姿勢（airPosture）評価専用のヘルパー。
+// 「体幹の垂直度」ではなく「打点前後で体軸がどれだけ安定しているか」を
+// 評価するための共通ロジックをここに集約する。
+// ---------------------------------------------------------------
+
+const RAD2DEG = 180 / Math.PI;
+
+/** 体軸角度・肩ラインの移動平均ウィンドウ（フレーム数）。MediaPipeの単発ブレを吸収する */
+const AIR_POSTURE_SMOOTHING_WINDOW = 3;
+
+/** 打点前後での急激な体軸変化：ここまでは自然な範囲として満点扱い */
+const TRUNK_SUDDEN_CHANGE_IDEAL_DEG = 6;
+const TRUNK_SUDDEN_CHANGE_TOLERANCE_DEG = 22;
+
+/** 打点前後を通じた体軸の維持度合い（区間内の角度の振れ幅） */
+const TRUNK_RETENTION_IDEAL_DEG = 8;
+const TRUNK_RETENTION_TOLERANCE_DEG = 26;
+
+/** 打つ側の肩が高いことを理想とする角度。逆方向のみ減点する */
+const SHOULDER_TILT_IDEAL_DEG = 8;
+const SHOULDER_TILT_REVERSE_TOLERANCE_DEG = 16;
+/** 肩が水平（0°）のときの基礎点。「水平＝満点」にはしないが大きく減点もしない */
+const SHOULDER_TILT_LEVEL_BASE_SCORE = 82;
+
+/** コメント切り替えのスコア閾値 */
+const AIR_POSTURE_GOOD_SCORE = 75;
+const AIR_POSTURE_POOR_SCORE = 45;
+
+/**
+ * hip→shoulderの傾きを「鉛直=0」の符号付き角度に変換する。
+ * 正負はどちらへ傾いているかを表すが、体幹の垂直度自体は評価に使わず、
+ * この系列の変化量（区間内の安定性）だけを評価に使う。
+ */
+function trunkAxisLean(frame: TrackedFrame): number | null {
+  const s = shoulderCenter(frame);
+  const h = hipCenter(frame);
+  if (!s || !h) return null;
+  return calculateTiltDegrees(h, s) + 90;
+}
+
+/** 打点前後（インパクト周辺）の体軸角度を、平滑化した上で系列として返す */
+function impactWindowSmoothedTrunkLean(ctx: EvaluationContext): number[] {
+  const frames = getImpactWindowFrames(ctx.frames, ctx.engine);
+  const raw = frames.map(trunkAxisLean).filter((v): v is number => v !== null);
+  return movingAverage(raw, AIR_POSTURE_SMOOTHING_WINDOW);
+}
+
+/**
+ * 打つ側の肩が高いほど正になる、符号付きの肩ライン角度（deg）。
+ * 0＝水平、正＝打つ側の肩が高い（理想方向）、負＝逆方向。
+ */
+function shoulderTiltForHittingSide(frame: TrackedFrame, side: "left" | "right"): number | null {
+  const left = landmark(frame, L.leftShoulder);
+  const right = landmark(frame, L.rightShoulder);
+  if (!left || !right) return null;
+  const width = distance(left, right);
+  if (width <= 0) return null;
+  const raisedPx = side === "right" ? left.y - right.y : right.y - left.y;
+  return Math.atan2(raisedPx, width) * RAD2DEG;
+}
+
+/** 区間内で最も高く上がった手首から打つ側を判定する（1フレームのブレに依存しない） */
+function dominantHittingSide(frames: TrackedFrame[]): "left" | "right" | null {
+  let best: "left" | "right" | null = null;
+  let bestY = Number.POSITIVE_INFINITY;
+  for (const frame of frames) {
+    const left = landmark(frame, L.leftWrist);
+    const right = landmark(frame, L.rightWrist);
+    if (right && right.y < bestY) {
+      bestY = right.y;
+      best = "right";
+    }
+    if (left && left.y < bestY) {
+      bestY = left.y;
+      best = "left";
+    }
+  }
+  return best;
+}
+
+/**
+ * 「理想方向（打つ側の肩が高い）は許容範囲を広く取り、逆方向のみ減点する」
+ * 非対称スコア。完全水平を満点の理想にはしない。
+ */
+function scoreShoulderTiltBalance(value: number, target: Target): number {
+  if (value >= 0) {
+    const bonus = clamp(
+      (value / target.ideal) * (100 - SHOULDER_TILT_LEVEL_BASE_SCORE),
+      0,
+      100 - SHOULDER_TILT_LEVEL_BASE_SCORE
+    );
+    return SHOULDER_TILT_LEVEL_BASE_SCORE + bonus;
+  }
+  const tolerance = Math.max(0.0001, target.tolerance);
+  return clamp(
+    SHOULDER_TILT_LEVEL_BASE_SCORE - (Math.abs(value) / tolerance) * SHOULDER_TILT_LEVEL_BASE_SCORE,
+    0,
+    SHOULDER_TILT_LEVEL_BASE_SCORE
+  );
+}
+
+function describeSuddenTrunkChange(_value: number, score: number): string {
+  if (score >= AIR_POSTURE_GOOD_SCORE) return "打点前後で体軸が安定しています。急な変化は見られません。";
+  if (score <= AIR_POSTURE_POOR_SCORE) return "打点直前で姿勢が崩れています。テイクバックから打点まで体軸を保つ意識を持ちましょう。";
+  return "打点前後でやや体軸の変化が見られます。";
+}
+
+function describeTrunkRetention(_value: number, score: number): string {
+  if (score >= AIR_POSTURE_GOOD_SCORE) return "体軸は安定しています。空中でも姿勢が維持できています。";
+  if (score <= AIR_POSTURE_POOR_SCORE) return "空中で体軸変化が大きく見られます。踏切時の体幹の締めを意識してください。";
+  return "空中でやや体軸が揺れています。";
+}
+
+function describeShoulderTiltBalance(value: number, score: number): string {
+  if (value < 0) return "打つ側と逆に肩が傾いています。打点前に打つ側の肩を高く保つ意識を持ちましょう。";
+  if (score >= AIR_POSTURE_GOOD_SCORE) return "肩の傾きは理想に近いです。打つ側の肩が適度に高く使えています。";
+  return "肩の傾きはおおむね良好です。もう少し打つ側の肩を高くできると理想的です。";
 }
 
 const metricDefinitions: MetricDefinition[] = [
@@ -888,14 +1017,21 @@ const metricDefinitions: MetricDefinition[] = [
     unit: "deg",
     weight: 0.8,
     phase: "peak",
-    description: "最高点付近の体幹の倒れ。",
-    targetByForm: formTargets({ ideal: 12, tolerance: 28, direction: "lower" }),
+    description: "打点前後で体軸が急に変化していないか（傾き自体は減点しない）。",
+    targetByForm: formTargets({
+      ideal: TRUNK_SUDDEN_CHANGE_IDEAL_DEG,
+      tolerance: TRUNK_SUDDEN_CHANGE_TOLERANCE_DEG,
+      direction: "lower",
+    }),
+    describe: describeSuddenTrunkChange,
     measure: (ctx) => {
-      const f = eventFrame(ctx, "peakIndex");
-      const s = f ? shoulderCenter(f) : null;
-      const h = f ? hipCenter(f) : null;
-      if (!s || !h) return null;
-      return Math.abs(90 - Math.abs(calculateTiltDegrees(h, s)));
+      const series = impactWindowSmoothedTrunkLean(ctx);
+      if (series.length < 2) return null;
+      const midpoint = Math.max(1, Math.floor(series.length / 2));
+      const before = avg(series.slice(0, midpoint));
+      const after = avg(series.slice(midpoint));
+      if (before === null || after === null) return null;
+      return Math.abs(after - before);
     },
   },
   {
@@ -920,17 +1056,43 @@ const metricDefinitions: MetricDefinition[] = [
     category: "airPosture",
     unit: "deg",
     weight: 0.85,
-    phase: "ascent",
-    description: "離地後から打点までの体幹角度変化。",
-    targetByForm: formTargets({ ideal: 18, tolerance: 36, direction: "lower" }),
+    phase: "peak",
+    description: "打点前後の区間を通じて体軸の角度がどれだけ維持されているか。",
+    targetByForm: formTargets({
+      ideal: TRUNK_RETENTION_IDEAL_DEG,
+      tolerance: TRUNK_RETENTION_TOLERANCE_DEG,
+      direction: "lower",
+    }),
+    describe: describeTrunkRetention,
     measure: (ctx) => {
-      const f = ctx.frames.slice(ctx.engine.events.takeoffIndex, ctx.engine.events.peakIndex + 1);
-      const tilts = f.map((frame) => {
-        const s = shoulderCenter(frame);
-        const h = hipCenter(frame);
-        return s && h ? calculateTiltDegrees(h, s) : null;
-      }).filter((v): v is number => v !== null);
-      return range(tilts);
+      const series = impactWindowSmoothedTrunkLean(ctx);
+      return range(series);
+    },
+  },
+  {
+    id: "shoulderTiltBalance",
+    label: "肩の傾き",
+    category: "airPosture",
+    unit: "deg",
+    weight: 0.75,
+    phase: "peak",
+    description: "打点前後の肩ラインの傾き。打つ側の肩がやや高い状態を理想とし、逆方向のみ減点する。",
+    targetByForm: formTargets({
+      ideal: SHOULDER_TILT_IDEAL_DEG,
+      tolerance: SHOULDER_TILT_REVERSE_TOLERANCE_DEG,
+      direction: "higher",
+    }),
+    score: scoreShoulderTiltBalance,
+    describe: describeShoulderTiltBalance,
+    measure: (ctx) => {
+      const frames = getImpactWindowFrames(ctx.frames, ctx.engine);
+      if (frames.length === 0) return null;
+      const side = dominantHittingSide(frames);
+      if (!side) return null;
+      const raw = frames
+        .map((frame) => shoulderTiltForHittingSide(frame, side))
+        .filter((v): v is number => v !== null);
+      return avg(movingAverage(raw, AIR_POSTURE_SMOOTHING_WINDOW));
     },
   },
   {
@@ -1336,9 +1498,13 @@ export function evaluateSpikeForm(frames: TrackedFrame[], selectedForm: SpikeArm
     const rawValue = definition.measure(ctx);
     const value = rawValue === null ? null : rawValue;
     const target = definition.targetByForm[selectedForm];
-    const score = value === null ? null : scoreValue(value, target);
+    const score = value === null ? null : (definition.score ?? scoreValue)(value, target);
     const phase = findEnginePhase(engine, definition.phase);
     const confidence = value === null ? 0 : phase ? clamp((phase.endIndex - phase.startIndex + 1) / 5, 0.35, 1) : 0.45;
+    const description =
+      value !== null && score !== null && definition.describe
+        ? definition.describe(value, score)
+        : definition.description;
     return {
       id: definition.id,
       label: definition.label,
@@ -1348,7 +1514,7 @@ export function evaluateSpikeForm(frames: TrackedFrame[], selectedForm: SpikeArm
       score,
       weight: definition.weight,
       confidence,
-      description: definition.description,
+      description,
     };
   });
 
