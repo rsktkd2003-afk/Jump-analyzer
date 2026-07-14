@@ -6,11 +6,18 @@ import {
 } from "./jumpPhaseEngine";
 import {
   calculateAngle,
-  calculateLineAngleFromHorizontal,
+  calculateLineAngleFromReference,
   calculateTiltDegrees,
   clamp,
   distance,
+  movingAverage,
 } from "./poseMath";
+import {
+  differentiate,
+  interpolateNulls,
+  movingAverage as movingAverageNullable,
+  reliableAverageY,
+} from "./signalProcessing";
 
 export type SpikeArmForm = "straightArm" | "bowAndArrow" | "circularArm";
 
@@ -348,9 +355,10 @@ function wristSpeeds(ctx: EvaluationContext, index: number): Array<{ frame: Trac
 // 空中姿勢（airPosture）評価専用のヘルパー。
 // 「体幹の垂直度」ではなく、最高点付近における
 //   1) 「打つ側の肩→反対側の足先」の全身ラインの一直線性（45%）
-//   2) そのラインが水平線に対して理想角度45°に近いか（35%）
-//   3) 最高点付近で体軸（肩中心-腰中心）の角度がどれだけ安定しているか（20%）
-// の3要素だけで評価する。体幹・肩の「絶対的な傾き」自体は減点しない。
+//   2) そのラインがネット上端（水平基準）に対して理想角度45°に近いか（35%）
+//   3) 体幹・足に「揺り戻し（短時間の方向反転）」が少ないか（20%）
+// の3要素だけで評価する。体幹・肩の「絶対的な傾き」自体、一定方向への
+// 傾き・脚の単純な上げ下げは減点しない。減点対象は方向反転のみ。
 // ---------------------------------------------------------------
 
 type Side = "left" | "right";
@@ -360,29 +368,43 @@ const AERIAL_POSTURE_WINDOW_SEC = 0.12;
 /** これ未満のサンプル数しか取れない場合は低信頼度として評価しない */
 const AERIAL_POSTURE_MIN_SAMPLES = 2;
 
+/**
+ * ネット上端の画面水平に対する傾き（deg）。評価②の水平基準として使う。
+ * 現状のコードにはネットを検出・指定する手段がないため、暫定的に画面水平（0°）を
+ * ネット基準として扱う。将来ネットの実際の傾きを取得できるようになったら、
+ * この値をその傾きに置き換えるだけで②の評価はネット基準へ切り替わる。
+ */
+const NET_HORIZONTAL_REFERENCE_DEG = 0;
+
 /** 一直線性（正規化した垂直距離）の評価バンド境界。仮の評価基準を定数化したもの */
 const ALIGNMENT_EXCELLENT_MAX = 0.04;
 const ALIGNMENT_GOOD_MAX = 0.08;
 const ALIGNMENT_FAIR_MAX = 0.13;
 const ALIGNMENT_POOR_SPAN = 0.09;
 
-/** 45°評価：水平線に対する理想角度と許容偏差バンド（度）。40〜50°を必ず理想（>=90点）に含める */
+/** 45°評価：ネット水平基準に対する理想角度と許容偏差バンド（度）。40〜50°を必ず理想（>=90点）に含める */
 const ANGLE_IDEAL_DEG = 45;
 const ANGLE_IDEAL_TOLERANCE_DEG = 5;
 const ANGLE_GOOD_TOLERANCE_DEG = 10;
 const ANGLE_FAIR_TOLERANCE_DEG = 20;
 const ANGLE_POOR_SPAN_DEG = 20;
 
-/** 体幹安定性：最高点付近の連続フレーム間の体軸角度変化量（中央値, deg）の評価バンド境界 */
-const TRUNK_STABILITY_EXCELLENT_MAX_DEG = 4;
-const TRUNK_STABILITY_GOOD_MAX_DEG = 8;
-const TRUNK_STABILITY_FAIR_MAX_DEG = 13;
-const TRUNK_STABILITY_POOR_SPAN_DEG = 15;
+/**
+ * 余計な動き（揺り戻し）：体幹角度・足の左右位置の系列から「短時間の方向反転」を
+ * カウントする際のノイズ除去フィルタ。MediaPipeの1フレーム単位のブレを
+ * 反転として誤検出しないための閾値をここへ集約する。
+ */
+export const WOBBLE_SMOOTHING_WINDOW = 3; // 移動平均ウィンドウ（フレーム数）
+export const WOBBLE_MIN_FRAME_GAP = 2; // 反転とみなす、直前の反転からの最低継続フレーム数
+export const TRUNK_WOBBLE_MIN_AMPLITUDE_DEG = 3; // 体幹の反転とみなす最小振れ幅（度）
+export const FOOT_WOBBLE_MIN_AMPLITUDE_RATIO = 0.03; // 足の反転とみなす最小振れ幅（体幹長比）
+/** 反転回数（0, 1, 2, 3, 4以上）ごとのスコア。回数が多いほど下げる */
+const WOBBLE_SCORE_BY_REVERSAL_COUNT = [100, 80, 55, 30, 10] as const;
 
-/** 空中姿勢スコアの内訳比率（一直線性45% + 45°評価35% + 体幹安定性20%） */
+/** 空中姿勢スコアの内訳比率（一直線性45% + 45°評価35% + 揺り戻し20%） */
 export const AERIAL_ALIGNMENT_WEIGHT = 0.45;
 export const AERIAL_ANGLE_WEIGHT = 0.35;
-export const AERIAL_TRUNK_STABILITY_WEIGHT = 0.2;
+export const AERIAL_EXTRA_MOTION_WEIGHT = 0.2;
 
 /** コメント切り替えのスコア閾値 */
 const AERIAL_GOOD_SCORE = 80;
@@ -483,8 +505,8 @@ function computeAerialLineSample(frame: TrackedFrame, side: Side): AerialLineSam
 
   const alignmentRatio = (perpendicularDistance(hip) + perpendicularDistance(knee)) / 2 / baselineLength;
 
-  // 水平線との角度は共通ユーティリティ（0〜90°へ正規化済み）を使い、重複実装しない。
-  const angleDeg = calculateLineAngleFromHorizontal(shoulder, foot);
+  // ネット水平基準（暫定的に画面水平）との角度は共通ユーティリティ（0〜90°へ正規化済み）を使い、重複実装しない。
+  const angleDeg = calculateLineAngleFromReference(shoulder, foot, NET_HORIZONTAL_REFERENCE_DEG);
 
   return { alignmentRatio, angleDeg };
 }
@@ -516,20 +538,110 @@ function trunkAxisAngleSeries(ctx: EvaluationContext): number[] {
 }
 
 /**
- * 体幹安定性の指標＝連続フレーム間の体軸角度変化量の中央値（deg）。
- * 外れ値（1フレームだけの検出ブレ）の影響を抑えつつ、
- * 「40°傾いたまま維持」なら差分はほぼ0（高評価）、
- * 「短時間で乱高下」すれば差分の中央値が大きくなる（低評価）ように設計している。
- * 体軸の絶対角度（40°など）自体はこの値に一切影響しない。
+ * 反対側の足先の、腰中心から見た「外向き」の左右オフセットを体幹長で正規化した系列。
+ * 正が大きいほど外へ、負に近いほど内側へ寄っていることを表す。
+ * 単純な脚の上げ下げ（Y方向）は見ず、左右（X方向）だけを追跡する。
  */
-function trunkStabilityVariation(ctx: EvaluationContext): number | null {
-  const series = trunkAxisAngleSeries(ctx);
-  if (series.length < AERIAL_POSTURE_MIN_SAMPLES) return null;
-  const diffs: number[] = [];
-  for (let i = 1; i < series.length; i += 1) {
-    diffs.push(Math.abs(series[i] - series[i - 1]));
+function footLateralOffsetSeries(ctx: EvaluationContext, side: Side): number[] {
+  const frames = aerialPostureWindowFrames(ctx);
+  const footIndex = side === "left" ? L.leftFoot : L.rightFoot;
+  const ankleIndex = side === "left" ? L.leftAnkle : L.rightAnkle;
+  const outwardSign = side === "left" ? -1 : 1;
+
+  const values: number[] = [];
+  for (const frame of frames) {
+    const hip = hipCenter(frame);
+    const foot = landmark(frame, footIndex) ?? landmark(frame, ankleIndex);
+    if (!hip || !foot || ctx.bodyScale <= 0) continue;
+    values.push(((foot.x - hip.x) * outwardSign) / ctx.bodyScale);
   }
-  return median(diffs);
+  return values;
+}
+
+type TurningPoint = { index: number; value: number; type: "peak" | "trough" };
+
+/**
+ * 平滑化済みの系列から「短時間の方向反転（揺り戻し）」の回数を数える。
+ * 一定方向への変化（単調増加・単調減少）は反転として数えない。
+ *
+ * フィルタは2段階：
+ *  1) 同じ種類（山どうし／谷どうし）の転換点が minFrameGap 未満の間隔で連続する場合は
+ *     1回のブレとみなして、より極端な値の方だけを残す（MediaPipeの単発ジッター対策）。
+ *  2) 山→谷／谷→山のように種類が交互に切り替わる転換点は、直前に採用した転換点との
+ *     振れ幅が minAmplitude 未満なら小さすぎるブレとして無視する。
+ * これにより「5→15→2→18→6」のような連続フレームでの乱高下は正しく複数回の反転として
+ * 検出しつつ、1フレームだけの微小なブレはノイズとして無視できる。
+ */
+export function countDirectionReversals(
+  smoothedSeries: number[],
+  minAmplitude: number,
+  minFrameGap: number
+): number {
+  if (smoothedSeries.length < 3) return 0;
+
+  // 1. 隣接3点の大小関係から極大・極小の候補（＝方向転換点）を抽出する
+  const candidates: TurningPoint[] = [];
+  for (let i = 1; i < smoothedSeries.length - 1; i += 1) {
+    const prev = smoothedSeries[i - 1];
+    const curr = smoothedSeries[i];
+    const next = smoothedSeries[i + 1];
+    if (curr >= prev && curr >= next && (curr > prev || curr > next)) {
+      candidates.push({ index: i, value: curr, type: "peak" });
+    } else if (curr <= prev && curr <= next && (curr < prev || curr < next)) {
+      candidates.push({ index: i, value: curr, type: "trough" });
+    }
+  }
+  if (candidates.length === 0) return 0;
+
+  // 2. 同じ種類の転換点がminFrameGap未満で連続する場合は、より極端な値へ統合する
+  const merged: TurningPoint[] = [];
+  for (const candidate of candidates) {
+    const last = merged[merged.length - 1];
+    if (last && last.type === candidate.type && candidate.index - last.index < minFrameGap) {
+      const moreExtreme =
+        candidate.type === "peak" ? candidate.value > last.value : candidate.value < last.value;
+      if (moreExtreme) merged[merged.length - 1] = candidate;
+      continue;
+    }
+    merged.push(candidate);
+  }
+
+  // 3. 種類が交互に切り替わる転換点どうしの振れ幅がminAmplitude未満なら無視する
+  const accepted: TurningPoint[] = [merged[0]];
+  for (let i = 1; i < merged.length; i += 1) {
+    const last = accepted[accepted.length - 1];
+    const candidate = merged[i];
+    if (Math.abs(candidate.value - last.value) >= minAmplitude) {
+      accepted.push(candidate);
+    }
+  }
+
+  // 転換点がN個 → 方向反転はN-1回（開始点は反転ではなく基準点のため）
+  return Math.max(0, accepted.length - 1);
+}
+
+type ExtraMotionResult = {
+  trunkReversals: number;
+  footReversals: number;
+  totalReversals: number;
+};
+
+/**
+ * 「余計な動き（揺り戻し）」＝体幹軸・左右足先それぞれの方向反転回数の合計。
+ * 一定方向への傾き・単純な脚の上げ下げは対象外。方向反転のみを減点する。
+ */
+function measureExtraMotion(ctx: EvaluationContext): ExtraMotionResult | null {
+  const trunkSeries = movingAverage(trunkAxisAngleSeries(ctx), WOBBLE_SMOOTHING_WINDOW);
+  if (trunkSeries.length < AERIAL_POSTURE_MIN_SAMPLES) return null;
+  const trunkReversals = countDirectionReversals(trunkSeries, TRUNK_WOBBLE_MIN_AMPLITUDE_DEG, WOBBLE_MIN_FRAME_GAP);
+
+  const leftFootSeries = movingAverage(footLateralOffsetSeries(ctx, "left"), WOBBLE_SMOOTHING_WINDOW);
+  const rightFootSeries = movingAverage(footLateralOffsetSeries(ctx, "right"), WOBBLE_SMOOTHING_WINDOW);
+  const footReversals =
+    countDirectionReversals(leftFootSeries, FOOT_WOBBLE_MIN_AMPLITUDE_RATIO, WOBBLE_MIN_FRAME_GAP) +
+    countDirectionReversals(rightFootSeries, FOOT_WOBBLE_MIN_AMPLITUDE_RATIO, WOBBLE_MIN_FRAME_GAP);
+
+  return { trunkReversals, footReversals, totalReversals: trunkReversals + footReversals };
 }
 
 /** 一直線性（0が理想、大きいほど崩れている）を0〜100へ区分線形変換する */
@@ -571,24 +683,10 @@ export function scoreAerialAngle(normalizedAngleDeg: number): number {
   return 40 - t * 40;
 }
 
-/** 体幹安定性（角度変化量の中央値。0が理想、大きいほど不安定）を0〜100へ区分線形変換する */
-export function scoreTrunkStability(variationDeg: number): number {
-  if (variationDeg <= TRUNK_STABILITY_EXCELLENT_MAX_DEG) {
-    return 100 - (variationDeg / TRUNK_STABILITY_EXCELLENT_MAX_DEG) * 10;
-  }
-  if (variationDeg <= TRUNK_STABILITY_GOOD_MAX_DEG) {
-    const t =
-      (variationDeg - TRUNK_STABILITY_EXCELLENT_MAX_DEG) /
-      (TRUNK_STABILITY_GOOD_MAX_DEG - TRUNK_STABILITY_EXCELLENT_MAX_DEG);
-    return 90 - t * 15;
-  }
-  if (variationDeg <= TRUNK_STABILITY_FAIR_MAX_DEG) {
-    const t =
-      (variationDeg - TRUNK_STABILITY_GOOD_MAX_DEG) / (TRUNK_STABILITY_FAIR_MAX_DEG - TRUNK_STABILITY_GOOD_MAX_DEG);
-    return 75 - t * 30;
-  }
-  const t = clamp((variationDeg - TRUNK_STABILITY_FAIR_MAX_DEG) / TRUNK_STABILITY_POOR_SPAN_DEG, 0, 1);
-  return 45 - t * 45;
+/** 反転回数（0〜4以上）を0〜100へ変換する。回数が多いほど下げる */
+export function scoreExtraMotion(reversalCount: number): number {
+  const index = clamp(Math.round(reversalCount), 0, WOBBLE_SCORE_BY_REVERSAL_COUNT.length - 1);
+  return WOBBLE_SCORE_BY_REVERSAL_COUNT[index];
 }
 
 function describeAerialAlignment(_value: number, score: number): string {
@@ -611,14 +709,112 @@ function describeAerialAngle(rawAngleDeg: number, score: number): string {
   return "全身のラインが立ちすぎており、理想とする45°より大きくなっています。";
 }
 
-function describeTrunkStability(_value: number, score: number): string {
+function describeExtraMotion(_value: number, score: number): string {
   if (score >= AERIAL_GOOD_SCORE) {
-    return "最高点付近で体軸が安定しています。傾き自体は減点していません。";
+    return "最高点付近で余計な動き（揺り戻し）は見られません。傾き自体は減点していません。";
   }
   if (score <= AERIAL_POOR_SCORE) {
-    return "最高点付近で体軸の角度が短時間で大きく変化しており、姿勢が不安定です。";
+    return "最高点付近で体幹または足に短時間の揺り戻しが繰り返されており、ふらついています。";
   }
-  return "最高点付近の体軸はおおむね安定していますが、やや変化が見られます。";
+  return "最高点付近でやや揺り戻しが見られますが、大きくは崩れていません。";
+}
+
+// ---------------------------------------------------------------
+// 踏切時間（takeoff.contactTime）：評価基準（星の閾値）は変更せず、測定区間のみを
+// 「最後の踏み込みで両足が地面に接地した瞬間」〜「両足とも地面から離れた瞬間」に
+// 変更する。groundContact.ts の grounded[] は左右の足を合成した単一の判定のため、
+// ここでは左右の足を独立に追跡する専用の判定を行う（他のフェーズ・指標には使わない）。
+// ---------------------------------------------------------------
+
+/** 接地とみなす、地面高さからの許容ズレ（体幹長比）。groundContact.tsの同名定数と同じ値を使用 */
+const TAKEOFF_CONTACT_TOLERANCE_TORSO_RATIO = 0.15;
+/** 接地とみなす足の垂直速度上限（体幹長/秒）。groundContact.tsの同名定数と同じ値を使用 */
+const TAKEOFF_FOOT_SPEED_TORSO_PER_SEC = 1.6;
+/** 体幹長が取得できない場合のフォールバック（px, px/秒） */
+const TAKEOFF_FALLBACK_TOLERANCE_PX = 18;
+const TAKEOFF_FALLBACK_SPEED_PX_PER_SEC = 200;
+/** 左右の足Y座標の移動平均ウィンドウ（フレーム数） */
+const TAKEOFF_FOOT_SMOOTHING_WINDOW = 5;
+/** 両足接地の開始点を遡って探す際、助走フェーズ開始よりどれだけ手前まで許容するか（フレーム数） */
+const TAKEOFF_SEARCH_LOOKBACK_MARGIN_FRAMES = 3;
+
+type FootContactSeries = {
+  grounded: boolean[];
+  times: number[];
+};
+
+/** 片足（left/right）の接地判定系列を作る。groundContact.tsと同じ「高さ＋速度」の複合条件を左右別々に適用する */
+function buildFootContactSeries(ctx: EvaluationContext, side: Side): FootContactSeries {
+  const frames = ctx.frames;
+  const footIndex = side === "left" ? L.leftFoot : L.rightFoot;
+  const heelIndex = side === "left" ? L.leftHeel : L.rightHeel;
+  const ankleIndex = side === "left" ? L.leftAnkle : L.rightAnkle;
+
+  const rawY = frames.map((frame) => reliableAverageY(frame, [ankleIndex, heelIndex, footIndex]));
+  const smoothedY = movingAverageNullable(interpolateNulls(rawY), TAKEOFF_FOOT_SMOOTHING_WINDOW);
+  const times = frames.map((f) => f.time);
+  const velocity = differentiate(smoothedY, times);
+
+  const { groundY, torsoPx } = ctx.engine.events;
+  const tolerance = torsoPx ? torsoPx * TAKEOFF_CONTACT_TOLERANCE_TORSO_RATIO : TAKEOFF_FALLBACK_TOLERANCE_PX;
+  const speedLimit = torsoPx ? torsoPx * TAKEOFF_FOOT_SPEED_TORSO_PER_SEC : TAKEOFF_FALLBACK_SPEED_PX_PER_SEC;
+
+  const grounded = frames.map((_, i) => {
+    const y = smoothedY[i];
+    if (y === null) return false;
+    const nearGround = y >= groundY - tolerance;
+    const v = velocity[i];
+    const slow = v === null || Math.abs(v) <= speedLimit;
+    return nearGround && slow;
+  });
+
+  return { grounded, times };
+}
+
+/**
+ * 「最後の踏み込みで両足が接地した瞬間」〜「両足とも地面から離れた瞬間」の時間（秒）。
+ * 助走最後の片足接地（着地予備動作）は、両足接地条件を満たさないため含まれない。
+ * 既存の takeoffIndex（最後に片足以上が接地していたフレーム）を起点に、
+ * そこから両足接地区間の先頭まで遡り、続いて両足が空中になる最初の点まで探索する。
+ */
+function measureBothFeetContactDurationSec(ctx: EvaluationContext): number | null {
+  const left = buildFootContactSeries(ctx, "left");
+  const right = buildFootContactSeries(ctx, "right");
+  const frameCount = ctx.frames.length;
+
+  const bothGrounded = (i: number) => left.grounded[i] && right.grounded[i];
+  const bothAirborne = (i: number) => !left.grounded[i] && !right.grounded[i];
+
+  const anchor = ctx.engine.events.takeoffIndex;
+  const lowerBound = Math.max(
+    0,
+    (findEnginePhase(ctx.engine, "approach")?.startIndex ?? 0) - TAKEOFF_SEARCH_LOOKBACK_MARGIN_FRAMES
+  );
+
+  // 開始：anchor（離地付近）から両足接地しているフレームを探し、連続区間の先頭まで遡る
+  let startIndex = -1;
+  for (let i = anchor; i >= lowerBound; i -= 1) {
+    if (bothGrounded(i)) {
+      startIndex = i;
+      break;
+    }
+  }
+  if (startIndex === -1) return null;
+  while (startIndex > lowerBound && bothGrounded(startIndex - 1)) {
+    startIndex -= 1;
+  }
+
+  // 終了：anchor以降で最初に両足とも空中になったフレーム
+  let endIndex = -1;
+  for (let i = anchor; i < frameCount; i += 1) {
+    if (bothAirborne(i)) {
+      endIndex = i;
+      break;
+    }
+  }
+  if (endIndex === -1 || endIndex <= startIndex) return null;
+
+  return left.times[endIndex] - left.times[startIndex];
 }
 
 const metricDefinitions: MetricDefinition[] = [
@@ -712,11 +908,11 @@ const metricDefinitions: MetricDefinition[] = [
     unit: "ms",
     weight: 1.2,
     phase: "takeoff",
-    description: "沈み込み開始から離地までの時間。",
+    description: "最後の踏み込みで両足が接地してから、両足が地面から離れるまでの時間。",
     targetByForm: formTargets({ ideal: 220, tolerance: 180, direction: "lower" }),
     measure: (ctx) => {
-      const p = findEnginePhase(ctx.engine, "takeoff");
-      return p ? Math.max(0, p.endTime - p.startTime) * 1000 : null;
+      const sec = measureBothFeetContactDurationSec(ctx);
+      return sec === null ? null : Math.max(0, sec) * 1000;
     },
   },
   {
@@ -1179,17 +1375,17 @@ const metricDefinitions: MetricDefinition[] = [
     },
   },
   {
-    id: "aerialTrunkStability",
-    label: "最高点付近の体幹安定性",
+    id: "aerialExtraMotion",
+    label: "余計な動き（揺り戻し）",
     category: "airPosture",
-    unit: "deg",
-    weight: AERIAL_TRUNK_STABILITY_WEIGHT,
+    unit: "index",
+    weight: AERIAL_EXTRA_MOTION_WEIGHT,
     phase: "peak",
-    description: "体幹または下半身の検出精度が低いため、体幹安定性を正確に評価できませんでした。",
-    targetByForm: formTargets({ ideal: 0, tolerance: TRUNK_STABILITY_FAIR_MAX_DEG }),
-    score: (value) => scoreTrunkStability(value),
-    describe: describeTrunkStability,
-    measure: (ctx) => trunkStabilityVariation(ctx),
+    description: "体幹または下半身の検出精度が低いため、揺り戻しを正確に評価できませんでした。",
+    targetByForm: formTargets({ ideal: 0, tolerance: WOBBLE_SCORE_BY_REVERSAL_COUNT.length - 1 }),
+    score: (value) => scoreExtraMotion(value),
+    describe: describeExtraMotion,
+    measure: (ctx) => measureExtraMotion(ctx)?.totalReversals ?? null,
   },
   {
     id: "followThroughRange",
@@ -1679,8 +1875,8 @@ function logAerialPostureDebug(
     lineAngleScore: byId("aerialLineAngle")?.score ?? null,
     alignmentRatio: byId("aerialLineAlignment")?.value ?? null,
     alignmentScore: byId("aerialLineAlignment")?.score ?? null,
-    trunkStabilityVariationDeg: byId("aerialTrunkStability")?.value ?? null,
-    trunkStabilityScore: byId("aerialTrunkStability")?.score ?? null,
+    extraMotionReversalCount: byId("aerialExtraMotion")?.value ?? null,
+    extraMotionScore: byId("aerialExtraMotion")?.score ?? null,
     aerialPostureScore,
     aerialPostureStars,
   });

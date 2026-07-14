@@ -70,17 +70,24 @@ export function calculateTiltDegrees(from: Point2D, to: Point2D): number {
 }
 
 /**
- * 2点を結ぶ直線と「画面上の水平線」がなす角度を、0〜90°へ正規化して返す。
+ * 2点を結ぶ直線と「基準線」がなす角度を、0〜90°へ正規化して返す。
+ * referenceDeg は基準線の画面水平に対する傾き（deg）。省略時は画面水平（0°）。
+ * ネットの上端など、画面水平と一致しない基準を使いたい場合はここへ渡す。
  * MediaPipeはY座標が下方向へ増加する座標系のため、Math.atan2(dy, dx) で
  * 得られる角度をそのまま使わず、鋭角（0〜90°）へ畳み込む。
  * 左右反転（利き手やカメラの向き）や上下反転の影響を受けない。
  */
-export function calculateLineAngleFromHorizontal(from: Point2D, to: Point2D): number {
+export function calculateLineAngleFromReference(from: Point2D, to: Point2D, referenceDeg = 0): number {
   const deltaX = to.x - from.x;
   const deltaY = to.y - from.y;
   const radians = Math.atan2(deltaY, deltaX);
-  const degrees = Math.abs(radians * RADIANS_TO_DEGREES);
+  const degrees = Math.abs(radians * RADIANS_TO_DEGREES - referenceDeg);
   return degrees > 90 ? 180 - degrees : degrees;
+}
+
+/** 画面水平（0°）を基準とする従来版。calculateLineAngleFromReferenceの薄いラッパー */
+export function calculateLineAngleFromHorizontal(from: Point2D, to: Point2D): number {
+  return calculateLineAngleFromReference(from, to);
 }
 
 /**
