@@ -1,4 +1,5 @@
 import { ghostButton, card, colors, mutedText, page, sectionTitle } from "../styles/theme";
+import InstallPwaBanner from "../components/InstallPwaBanner";
 
 type Props = {
   historyCount: number;
@@ -22,6 +23,16 @@ export default function SettingsPage({ historyCount, onClearHistory }: Props) {
         >
           履歴を全削除
         </button>
+      </div>
+
+      <div style={{ ...card, marginTop: 16 }}>
+        <h2 style={sectionTitle}>アプリのインストール</h2>
+        <p style={{ ...mutedText, marginTop: 8 }}>
+          ホーム画面に追加すると、通信のない体育館でも動画解析まで利用できます。
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <InstallPwaBanner />
+        </div>
       </div>
 
       <div style={{ ...card, marginTop: 16 }}>

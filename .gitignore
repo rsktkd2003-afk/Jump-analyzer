@@ -28,3 +28,4 @@ public/mediapipe/wasm/
 *.sw?
 
 .vercel
+.env*

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import Sidebar from "./components/layout/Sidebar";
+import PwaStatusToast from "./components/PwaStatusToast";
 import HomePage from "./pages/HomePage";
 import AnalyzePage from "./pages/AnalyzePage";
 import ResultPage from "./pages/ResultPage";
@@ -429,6 +430,8 @@ function JumpAnalyzer() {
           <SettingsPage historyCount={history.length} onClearHistory={handleClearHistory} />
         )}
       </main>
+
+      <PwaStatusToast />
     </div>
   );
 }
