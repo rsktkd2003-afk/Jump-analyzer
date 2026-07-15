@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
-import MarkerToolbar from "./components/MarkerToolbar";
-import ResultCard from "./components/ResultCard";
-import VideoPlayer from "./components/VideoPlayer";
-import HistoryList from "./components/HistoryList";
-import InstallPwaBanner from "./components/InstallPwaBanner";
-import PwaStatusToast from "./components/PwaStatusToast";
+import Sidebar from "./components/layout/Sidebar";
+import HomePage from "./pages/HomePage";
+import AnalyzePage from "./pages/AnalyzePage";
+import ResultPage from "./pages/ResultPage";
+import ComparePage from "./pages/ComparePage";
+import HistoryPage from "./pages/HistoryPage";
+import ComingSoonPage from "./pages/ComingSoonPage";
+import SettingsPage from "./pages/SettingsPage";
+import { PlayersIcon, TeamIcon } from "./components/layout/Icons";
 
 import type { MarkerTarget, Markers } from "./types/measurement";
 import type { MeasurementHistoryItem } from "./types/history";
+import type { PageId } from "./types/navigation";
 
 import {
-  calculateCmPerPx,
   calculateMaxReach,
   calculateReachError,
 } from "./utils/jumpCalculator";
@@ -26,6 +29,22 @@ import {
 } from "./storage/measurementStorage";
 import { estimateReachFromInputs } from "./ai/reachEstimateAnalyzer";
 
+import { useVideoSource } from "./hooks/useVideoSource";
+import { useSelectedPerson } from "./hooks/useSelectedPerson";
+import { useMotionTracking } from "./hooks/useMotionTracking";
+import { usePoseAnalysis } from "./hooks/usePoseAnalysis";
+
+import { analyze } from "./analysis";
+import type { SkillId } from "./analysis/types";
+import { buildFormSummary, toFormCategoryScores } from "./utils/formSummary";
+
+import {
+  DEFAULT_CAPTURE_SETTINGS,
+  type CaptureSettings,
+} from "./ai/captureSettings";
+
+import { colors } from "./styles/theme";
+
 const initialMarkers: Markers = {
   calibA: null,
   calibB: null,
@@ -35,7 +54,12 @@ const initialMarkers: Markers = {
   ballB: null,
 };
 
+const USER_NAME = "ゲスト";
+const USER_ROLE = "コーチ";
+
 function JumpAnalyzer() {
+  const [page, setPage] = useState<PageId>("home");
+
   const [fps, setFps] = useState(60);
   const [knownCm, setKnownCm] = useState(45);
   const [ringHeight, setRingHeight] = useState(305);
@@ -44,6 +68,11 @@ function JumpAnalyzer() {
   const [knownMaxReach, setKnownMaxReach] = useState<number | null>(null);
   const [target, setTarget] = useState<MarkerTarget>("calibA");
 
+  const [captureSettings, setCaptureSettings] = useState<CaptureSettings>(
+    DEFAULT_CAPTURE_SETTINGS
+  );
+  const [skillId, setSkillId] = useState<SkillId>("spikeJump");
+
   const [markers, setMarkers] = useState<Markers>(initialMarkers);
 
   const [timeA, setTimeA] = useState<number | null>(null);
@@ -51,19 +80,48 @@ function JumpAnalyzer() {
   const [frameA, setFrameA] = useState<number | null>(null);
   const [frameB, setFrameB] = useState<number | null>(null);
 
-  const [peakTime, setPeakTime] = useState<number | null>(null);
-  const [peakFrame, setPeakFrame] = useState<number | null>(null);
+  const [history, setHistory] = useState<MeasurementHistoryItem[]>(loadMeasurementHistory);
 
-  const [history, setHistory] = useState<MeasurementHistoryItem[]>([]);
+  const [isStarting, setIsStarting] = useState(false);
+  const [resultTimestamp, setResultTimestamp] = useState<string | null>(null);
 
-  useEffect(() => {
-    setHistory(loadMeasurementHistory());
-  }, []);
+  // ---- 動画・人物選択・トラッキング・フォーム解析（元は各コンポーネント内部で
+  // 個別に呼んでいたフックを、解析→結果の画面をまたいでデータを共有できるよう
+  // ルートへ引き上げている。ロジック自体は変更していない） ----
+  const { videoRef, videoUrl, videoName, currentTime, setCurrentTime, loadFile } =
+    useVideoSource();
 
-  const cmPerPx = useMemo(
-    () => calculateCmPerPx(markers, knownCm),
-    [markers, knownCm]
-  );
+  const { selectedPoint, selectPerson, resetSelectedPerson } = useSelectedPerson();
+
+  const {
+    trackedFrames,
+    currentTrackedFrame,
+    trackingMessage,
+    trackingProgress,
+    isTracking,
+    isSmoothingEnabled,
+    setIsSmoothingEnabled,
+    runTracking,
+    resetTracking,
+  } = useMotionTracking(videoRef, fps, currentTime, selectedPoint);
+
+  const {
+    formResult,
+    peakFrame,
+    peakTime,
+    isAnalyzing: isAnalyzingForm,
+    message: formMessage,
+    analyzeForm,
+    resetPoseAnalysis,
+  } = usePoseAnalysis(videoRef, fps);
+
+  const handleLoadVideoFile = (file: File) => {
+    loadFile(file);
+    resetSelectedPerson();
+    resetTracking();
+    resetPoseAnalysis();
+    setResultTimestamp(null);
+  };
 
   const maxReach = useMemo(
     () => calculateMaxReach({ markers, knownCm, ringHeight }),
@@ -102,10 +160,7 @@ function JumpAnalyzer() {
     [markers, knownCm, timeA, timeB]
   );
 
-  const speedError = useMemo(
-    () => calculateSpeedError(ballSpeed),
-    [ballSpeed]
-  );
+  const speedError = useMemo(() => calculateSpeedError(ballSpeed), [ballSpeed]);
 
   const reachEstimate = useMemo(
     () =>
@@ -117,30 +172,34 @@ function JumpAnalyzer() {
         knownMaxReachCm: knownMaxReach,
         calibrationErrorCm: reachError,
       }),
-    [
-      standingReach,
-      heightCm,
-      maxReach,
-      estimatedJumpHeight,
-      knownMaxReach,
-      reachError,
-    ]
+    [standingReach, heightCm, maxReach, estimatedJumpHeight, knownMaxReach, reachError]
+  );
+
+  // 自動フォーム解析結果（既存の analysis/evaluation ロジックを結果画面向けに集約表示するだけ）
+  const analysisResult = useMemo(() => {
+    if (trackedFrames.length < 3) return null;
+    return analyze(trackedFrames, skillId);
+  }, [trackedFrames, skillId]);
+
+  const formSummary = useMemo(
+    () => buildFormSummary(analysisResult?.features ?? []),
+    [analysisResult]
   );
 
   const handleMarkerPlace = (
-    target: MarkerTarget,
+    markerTarget: MarkerTarget,
     point: { x: number; y: number }
   ) => {
     setMarkers((prev) => ({
       ...prev,
-      [target]: point,
+      [markerTarget]: point,
     }));
   };
 
-  const handleClearMarker = (target: MarkerTarget) => {
+  const handleClearMarker = (markerTarget: MarkerTarget) => {
     setMarkers((prev) => ({
       ...prev,
-      [target]: null,
+      [markerTarget]: null,
     }));
   };
 
@@ -158,16 +217,6 @@ function JumpAnalyzer() {
       setTimeB(time);
       setFrameB(frame);
     }
-  };
-
-  const resetMarkers = () => {
-    setMarkers(initialMarkers);
-    setTimeA(null);
-    setTimeB(null);
-    setFrameA(null);
-    setFrameB(null);
-    setPeakTime(null);
-    setPeakFrame(null);
   };
 
   const handleSaveResult = () => {
@@ -192,6 +241,14 @@ function JumpAnalyzer() {
       reachError,
       ballSpeed,
       speedError,
+      overallScore: formSummary.overallScore,
+      overallStars: formSummary.overallStars,
+      rank: formSummary.rank,
+      formCategoryScores: analysisResult
+        ? (toFormCategoryScores(formSummary.categories) as MeasurementHistoryItem["formCategoryScores"])
+        : null,
+      improvementComments: formSummary.improvements.map((i) => i.evaluation.comment),
+      strengthComments: formSummary.strengths.map((s) => s.evaluation.comment),
     };
 
     const next = [item, ...history];
@@ -207,6 +264,7 @@ function JumpAnalyzer() {
   const handleShare = async () => {
     const text = [
       "🏐 Jump Analyzer 測定結果",
+      `総合スコア：${formSummary.overallScore !== null ? `${formSummary.overallScore}点` : "-"}`,
       `最高到達点：${maxReach ? `${maxReach.toFixed(1)}cm` : "-"}`,
       `ジャンプ高：${jumpHeight ? `${jumpHeight.toFixed(1)}cm` : "-"}`,
       `推定最高到達点：${
@@ -219,14 +277,8 @@ function JumpAnalyzer() {
           ? `${reachEstimate.estimatedJumpHeightCm.toFixed(1)}cm`
           : "-"
       }`,
-      `換算方式：${reachEstimate.methodLabel}`,
-      `離地A：${frameA !== null ? `${frameA}F` : "-"}`,
-      `着地B：${frameB !== null ? `${frameB}F` : "-"}`,
       `滞空時間：${airTime ? `${airTime.toFixed(3)}秒` : "-"}`,
-      `滞空フレーム数：${airFrameCount ? `${airFrameCount}F` : "-"}`,
-      `最高点フレーム：${peakFrame !== null ? `${peakFrame}F` : "-"}`,
       `球速：${ballSpeed ? `${ballSpeed.toFixed(1)}km/h` : "-"}`,
-      `誤差：${reachError ? `±${reachError.toFixed(1)}cm` : "-"}`,
     ].join("\n");
 
     if (navigator.share) {
@@ -237,249 +289,148 @@ function JumpAnalyzer() {
     }
   };
 
+  const handleStartAnalysis = async () => {
+    if (!videoUrl) return;
+
+    setIsStarting(true);
+    try {
+      await runTracking();
+      await analyzeForm();
+    } finally {
+      setIsStarting(false);
+    }
+
+    setResultTimestamp(new Date().toLocaleString());
+    setPage("result");
+  };
+
   return (
-    <main
-      style={{
-        maxWidth: 520,
-        margin: "0 auto",
-        padding: 12,
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <h1 style={{ fontSize: 24 }}>🏐 Jump Analyzer</h1>
+    <div style={{ display: "flex", width: "100%", minHeight: "100svh" }}>
+      <Sidebar page={page} onNavigate={setPage} userName={USER_NAME} userRole={USER_ROLE} />
 
-      <InstallPwaBanner />
-
-      <section>
-        <label>
-          身長(cm)：
-          <input
-            type="number"
-            value={heightCm}
-            onChange={(e) => setHeightCm(Number(e.target.value))}
-            style={{ width: 80, fontSize: 16, marginLeft: 8 }}
+      <main style={{ flex: 1, minWidth: 0, background: colors.bg }}>
+        {page === "home" && (
+          <HomePage
+            userName={USER_NAME}
+            history={history}
+            onStartAnalyze={() => setPage("analyze")}
+            onOpenHistory={() => setPage("history")}
           />
-        </label>
+        )}
 
-        <label style={{ display: "block", marginTop: 8 }}>
-          指高(cm)：
-          <input
-            type="number"
-            value={standingReach}
-            onChange={(e) => setStandingReach(Number(e.target.value))}
-            style={{ width: 80, fontSize: 16, marginLeft: 8 }}
+        {page === "analyze" && (
+          <AnalyzePage
+            fps={fps}
+            onFpsChange={setFps}
+            heightCm={heightCm}
+            onHeightChange={setHeightCm}
+            standingReach={standingReach}
+            onStandingReachChange={setStandingReach}
+            knownMaxReach={knownMaxReach}
+            onKnownMaxReachChange={setKnownMaxReach}
+            knownCm={knownCm}
+            onKnownCmChange={setKnownCm}
+            ringHeight={ringHeight}
+            onRingHeightChange={setRingHeight}
+            captureSettings={captureSettings}
+            onCaptureSettingsChange={setCaptureSettings}
+            skillId={skillId}
+            onSkillIdChange={setSkillId}
+            markers={markers}
+            markerTarget={target}
+            onMarkerTargetChange={setTarget}
+            onMarkerPlace={handleMarkerPlace}
+            onClearMarker={handleClearMarker}
+            onTimeSave={handleTimeSave}
+            videoRef={videoRef}
+            videoUrl={videoUrl}
+            videoName={videoName}
+            currentTime={currentTime}
+            setCurrentTime={setCurrentTime}
+            loadFile={handleLoadVideoFile}
+            selectedPoint={selectedPoint}
+            onVideoClickSelectPerson={selectPerson}
+            trackedFrames={trackedFrames}
+            currentTrackedFrame={currentTrackedFrame}
+            trackingMessage={trackingMessage}
+            trackingProgress={trackingProgress}
+            isTracking={isTracking}
+            isSmoothingEnabled={isSmoothingEnabled}
+            setIsSmoothingEnabled={setIsSmoothingEnabled}
+            runTracking={runTracking}
+            formResult={formResult}
+            peakFrame={peakFrame}
+            peakTime={peakTime}
+            isAnalyzingForm={isAnalyzingForm}
+            formMessage={formMessage}
+            analyzeForm={analyzeForm}
+            maxReach={maxReach}
+            jumpHeight={jumpHeight}
+            airTime={airTime}
+            airFrameCount={airFrameCount}
+            reachEstimate={reachEstimate}
+            ballSpeed={ballSpeed}
+            speedError={speedError}
+            reachError={reachError}
+            isStarting={isStarting}
+            onStartAnalysis={handleStartAnalysis}
+            onBack={() => setPage("home")}
           />
-        </label>
+        )}
 
-        <label style={{ display: "block", marginTop: 8 }}>
-          既知の最高到達点(cm)：
-          <input
-            type="number"
-            value={knownMaxReach ?? ""}
-            onChange={(e) => {
-              const value = e.target.value;
-              setKnownMaxReach(value === "" ? null : Number(value));
-            }}
-            placeholder="任意"
-            style={{ width: 90, fontSize: 16, marginLeft: 8 }}
+        {page === "result" && (
+          <ResultPage
+            videoRef={videoRef}
+            videoUrl={videoUrl}
+            videoName={videoName}
+            currentTime={currentTime}
+            setCurrentTime={setCurrentTime}
+            currentTrackedFrame={currentTrackedFrame}
+            fps={fps}
+            analysisResult={analysisResult}
+            reachEstimate={reachEstimate}
+            maxReach={maxReach}
+            jumpHeight={jumpHeight}
+            airTime={airTime}
+            resultTimestamp={resultTimestamp}
+            onBack={() => setPage("analyze")}
+            onSave={handleSaveResult}
+            onShare={handleShare}
           />
-        </label>
-      </section>
+        )}
 
-      <hr />
+        {page === "compare" && <ComparePage history={history} />}
 
-      <VideoPlayer
-        fps={fps}
-        bodyProfile={{ heightCm, standingReachCm: standingReach }}
-        onFpsChange={setFps}
-        onTimeSave={handleTimeSave}
-        onPeakDetected={(frame, time) => {
-          setPeakFrame(frame);
-          setPeakTime(time);
-        }}
-        markers={markers}
-        markerTarget={target}
-        onMarkerPlace={handleMarkerPlace}
-      />
-
-      <hr />
-
-      <MarkerToolbar
-        target={target}
-        onChange={setTarget}
-        onClearMarker={handleClearMarker}
-      />
-
-      <hr />
-
-      <section>
-        <h2>基準設定</h2>
-
-        <label>
-          基準距離(cm)：
-          <input
-            type="number"
-            value={knownCm}
-            onChange={(e) => setKnownCm(Number(e.target.value))}
-            style={{ width: 80, fontSize: 16, marginLeft: 8 }}
+        {page === "history" && (
+          <HistoryPage
+            history={history}
+            onClear={handleClearHistory}
+            onOpenCompare={() => setPage("compare")}
           />
-        </label>
+        )}
 
-        <p>
-          {cmPerPx
-            ? `1px = ${cmPerPx.toFixed(3)}cm`
-            : "基準A/Bをタップしてね"}
-        </p>
-      </section>
-
-      <hr />
-
-      <section>
-        <h2>ジャンプ計測</h2>
-
-        <label>
-          リング高さ(cm)：
-          <input
-            type="number"
-            value={ringHeight}
-            onChange={(e) => setRingHeight(Number(e.target.value))}
-            style={{ width: 80, fontSize: 16, marginLeft: 8 }}
+        {page === "players" && (
+          <ComingSoonPage
+            title="選手"
+            description="選手ごとの解析履歴を管理する機能は準備中です。現在は1回の解析ごとに履歴（「履歴」タブ）から確認できます。"
+            icon={<PlayersIcon size={26} />}
           />
-        </label>
+        )}
 
-        <ResultCard
-          title="最高到達点"
-          value={maxReach ? `約 ${maxReach.toFixed(1)} cm` : "-"}
-          subText={
-            reachError ? `誤差目安：±${reachError.toFixed(1)}cm` : undefined
-          }
-        />
+        {page === "team" && (
+          <ComingSoonPage
+            title="チーム"
+            description="チーム単位のダッシュボード（ランキング・練習参加率など）は準備中です。"
+            icon={<TeamIcon size={26} />}
+          />
+        )}
 
-        <ResultCard
-          title="ジャンプ高"
-          value={jumpHeight ? `約 ${jumpHeight.toFixed(1)} cm` : "-"}
-          subText={`指高：${standingReach}cm`}
-        />
-
-        <ResultCard
-          title="推定最高到達点cm"
-          value={
-            reachEstimate.estimatedMaxReachCm !== null
-              ? `約 ${reachEstimate.estimatedMaxReachCm.toFixed(1)} cm`
-              : "-"
-          }
-          subText={`${reachEstimate.methodLabel} / ${reachEstimate.confidenceText}`}
-        />
-
-        <ResultCard
-          title="推定ジャンプ高cm"
-          value={
-            reachEstimate.estimatedJumpHeightCm !== null
-              ? `約 ${reachEstimate.estimatedJumpHeightCm.toFixed(1)} cm`
-              : "-"
-          }
-          subText={`指高：${reachEstimate.standingReachCm ?? "-"}cm / ${
-            reachEstimate.scaleInfo
-          }`}
-        />
-
-        <p style={{ fontSize: 13, color: "#666", lineHeight: 1.6 }}>
-          {reachEstimate.note}
-        </p>
-
-        <ResultCard
-          title="滞空時間"
-          value={airTime ? `${airTime.toFixed(3)} 秒` : "-"}
-          subText={
-            airFrameCount
-              ? `${airFrameCount}フレーム / 推定ジャンプ高：約 ${estimatedJumpHeight?.toFixed(
-                  1
-                )}cm`
-              : "離地をA、着地をBで保存"
-          }
-        />
-
-        <ResultCard
-          title="最高点フレーム"
-          value={peakFrame !== null ? `${peakFrame} F` : "-"}
-          subText={peakTime !== null ? `${peakTime.toFixed(3)} 秒` : undefined}
-        />
-      </section>
-
-      <hr />
-
-      <section>
-        <h2>フレーム情報</h2>
-
-        <p>
-          離地A：
-          {timeA !== null && frameA !== null
-            ? `${timeA.toFixed(3)} 秒 / ${frameA}F`
-            : "-"}
-        </p>
-
-        <p>
-          着地B：
-          {timeB !== null && frameB !== null
-            ? `${timeB.toFixed(3)} 秒 / ${frameB}F`
-            : "-"}
-        </p>
-
-        <p>
-          滞空：
-          {airTime && airFrameCount
-            ? `${airTime.toFixed(3)} 秒 / ${airFrameCount}F`
-            : "-"}
-        </p>
-      </section>
-
-      <hr />
-
-      <section>
-        <h2>球速</h2>
-
-        <ResultCard
-          title="球速"
-          value={ballSpeed ? `約 ${ballSpeed.toFixed(1)} km/h` : "-"}
-          subText={
-            speedError
-              ? `誤差目安：±${speedError.toFixed(1)}km/h`
-              : "ボールA/Bと時刻A/Bを保存"
-          }
-        />
-      </section>
-
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={handleSaveResult} style={buttonStyle}>
-          結果保存
-        </button>
-
-        <button onClick={handleShare} style={buttonStyle}>
-          共有
-        </button>
-      </div>
-
-      <button onClick={resetMarkers} style={{ ...buttonStyle, width: "100%" }}>
-        測定リセット
-      </button>
-
-      <hr />
-
-      <HistoryList items={history} onClear={handleClearHistory} />
-
-      <PwaStatusToast />
-    </main>
+        {page === "settings" && (
+          <SettingsPage historyCount={history.length} onClearHistory={handleClearHistory} />
+        )}
+      </main>
+    </div>
   );
 }
-
-const buttonStyle: React.CSSProperties = {
-  flex: 1,
-  padding: 14,
-  borderRadius: 12,
-  border: "1px solid #ccc",
-  background: "#fff",
-  fontSize: 16,
-  marginTop: 12,
-};
 
 export default JumpAnalyzer;

@@ -4,6 +4,7 @@ import type {
   CameraView,
   CaptureSettings,
 } from "../ai/captureSettings";
+import { colors, radius } from "../styles/theme";
 
 type Props = {
   value: CaptureSettings;
@@ -13,7 +14,7 @@ type Props = {
 export function CaptureSettingsForm({ value, onChange }: Props) {
   const update = <K extends keyof CaptureSettings>(
     key: K,
-    nextValue: CaptureSettings[K],
+    nextValue: CaptureSettings[K]
   ) => {
     onChange({
       ...value,
@@ -22,14 +23,7 @@ export function CaptureSettingsForm({ value, onChange }: Props) {
   };
 
   return (
-    <section className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
-      <div className="mb-3">
-        <h3 className="text-sm font-bold text-white">撮影設定（任意）</h3>
-        <p className="text-xs text-slate-400">
-          未入力でも解析できます。入力すると評価の信頼度を調整します。
-        </p>
-      </div>
-
+    <>
       <RadioGroup<CameraView>
         title="撮影方向"
         value={value.cameraView}
@@ -68,7 +62,7 @@ export function CaptureSettingsForm({ value, onChange }: Props) {
         ]}
         onChange={(v) => update("distance", v)}
       />
-    </section>
+    </>
   );
 }
 
@@ -79,30 +73,38 @@ function RadioGroup<T extends string>(props: {
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="mb-4 last:mb-0">
-      <p className="mb-2 text-xs font-semibold text-slate-300">
+    <div style={{ marginBottom: 16 }}>
+      <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 600, color: colors.bodyText }}>
         {props.title}
       </p>
 
-      <div className="flex flex-wrap gap-2">
-        {props.options.map(([key, label]) => (
-          <label
-            key={key}
-            className={`cursor-pointer rounded-full border px-3 py-1 text-xs ${
-              props.value === key
-                ? "border-sky-400 bg-sky-400/20 text-sky-100"
-                : "border-slate-700 bg-slate-800 text-slate-300"
-            }`}
-          >
-            <input
-              type="radio"
-              className="sr-only"
-              checked={props.value === key}
-              onChange={() => props.onChange(key)}
-            />
-            {label}
-          </label>
-        ))}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {props.options.map(([key, label]) => {
+          const active = props.value === key;
+          return (
+            <label
+              key={key}
+              style={{
+                cursor: "pointer",
+                borderRadius: radius.pill,
+                border: `1px solid ${active ? colors.accent : colors.border}`,
+                background: active ? colors.accentSoft : "#fff",
+                color: active ? colors.accent : colors.bodyText,
+                padding: "6px 14px",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              <input
+                type="radio"
+                checked={active}
+                onChange={() => props.onChange(key)}
+                style={{ display: "none" }}
+              />
+              {label}
+            </label>
+          );
+        })}
       </div>
     </div>
   );

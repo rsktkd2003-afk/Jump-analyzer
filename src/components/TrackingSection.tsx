@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import TrackingCanvas from "./TrackingCanvas";
 import TrackingInfoCard from "./TrackingInfoCard";
@@ -16,42 +16,51 @@ import ApproachLandingPanel from "./ApproachLandingPanel";
 import SpikeFormEvaluationPanel from "./SpikeFormEvaluationPanel";
 import type { SpikeArmForm } from "../ai/spikeFormEvaluation";
 
-import { useMotionTracking } from "../hooks/useMotionTracking";
-import type { SelectedPersonPoint } from "../hooks/useSelectedPerson";
+import type { TrackedFrame } from "../ai/poseAnalyzer";
 import type { BodyProfile } from "../analysis/evaluation";
 import { buttonStyle, hintStyle } from "../styles/ui";
 
 type Props = {
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  fps: number;
-  currentTime: number;
-  selectedPoint: SelectedPersonPoint | null;
   /** 身長・指高（cm換算用、任意） */
   bodyProfile?: BodyProfile;
+
+  // トラッキング状態は親（解析フロー全体を束ねる画面）から受け取る。
+  // ロジック（useMotionTracking）自体は変更せず、呼び出し位置のみを
+  // 親へ引き上げて「解析を開始する」ボタンから一括起動できるようにしている。
+  trackedFrames: TrackedFrame[];
+  currentTrackedFrame: TrackedFrame | null;
+  trackingMessage: string;
+  trackingProgress: number;
+  isTracking: boolean;
+  isSmoothingEnabled: boolean;
+  setIsSmoothingEnabled: (value: boolean) => void;
+  runTracking: () => void;
+  onFramesChange?: (frames: TrackedFrame[]) => void;
 };
 
 export default function TrackingSection({
   videoRef,
-  fps,
-  currentTime,
-  selectedPoint,
   bodyProfile,
+  trackedFrames,
+  currentTrackedFrame,
+  trackingMessage,
+  trackingProgress,
+  isTracking,
+  isSmoothingEnabled,
+  setIsSmoothingEnabled,
+  runTracking,
+  onFramesChange,
 }: Props) {
   const [isCropMode, setIsCropMode] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
   const [selectedSpikeForm, setSelectedSpikeForm] =
     useState<SpikeArmForm>("straightArm");
 
-  const {
-    trackedFrames,
-    currentTrackedFrame,
-    trackingMessage,
-    trackingProgress,
-    isTracking,
-    isSmoothingEnabled,
-    setIsSmoothingEnabled,
-    runTracking,
-  } = useMotionTracking(videoRef, fps, currentTime, selectedPoint);
+  useEffect(() => {
+    onFramesChange?.(trackedFrames);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trackedFrames]);
 
   return (
     <section>

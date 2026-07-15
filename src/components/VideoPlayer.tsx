@@ -1,19 +1,21 @@
+import { useState } from "react";
+
 import FrameStepControls, { type TimeSaveLabel } from "./FrameStepControls";
 import TrackingSection from "./TrackingSection";
 import FormAnalysisSection from "./FormAnalysisSection";
 
-import { useSelectedPerson } from "../hooks/useSelectedPerson";
-import { useVideoSource } from "../hooks/useVideoSource";
-import { numberInputStyle } from "../styles/ui";
+import type { SelectedPersonPoint } from "../hooks/useSelectedPerson";
+import { colors, radius } from "../styles/theme";
 
 import type { MarkerTarget, Markers } from "../types/measurement";
 import type { BodyProfile } from "../analysis/evaluation";
+import type { TrackedFrame } from "../ai/poseAnalyzer";
+import type { JumpFormAnalysisResult } from "../ai/poseAnalyzer";
 
 export type { TimeSaveLabel };
 
 type Props = {
   fps: number;
-  onFpsChange: (fps: number) => void;
   onTimeSave: (label: TimeSaveLabel, time: number, frame: number) => void;
   onPeakDetected?: (frame: number, time: number) => void;
   markers: Markers;
@@ -21,6 +23,33 @@ type Props = {
   onMarkerPlace: (target: MarkerTarget, point: { x: number; y: number }) => void;
   /** 身長・指高（トラッキング解析のcm換算用、任意） */
   bodyProfile?: BodyProfile;
+
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  videoUrl: string | null;
+  videoName: string;
+  currentTime: number;
+  setCurrentTime: (time: number) => void;
+
+  selectedPoint: SelectedPersonPoint | null;
+  onVideoClickSelectPerson: (e: React.MouseEvent<HTMLVideoElement>, video: HTMLVideoElement) => void;
+
+  // トラッキング（人物追跡）
+  trackedFrames: TrackedFrame[];
+  currentTrackedFrame: TrackedFrame | null;
+  trackingMessage: string;
+  trackingProgress: number;
+  isTracking: boolean;
+  isSmoothingEnabled: boolean;
+  setIsSmoothingEnabled: (value: boolean) => void;
+  runTracking: () => void;
+
+  // フォーム解析
+  formResult: JumpFormAnalysisResult | null;
+  peakFrame: number | null;
+  peakTime: number | null;
+  isAnalyzingForm: boolean;
+  formMessage: string;
+  analyzeForm: () => void;
 };
 
 const markerLabels: Record<MarkerTarget, string> = {
@@ -34,35 +63,41 @@ const markerLabels: Record<MarkerTarget, string> = {
 
 export default function VideoPlayer({
   fps,
-  onFpsChange,
   onTimeSave,
   onPeakDetected,
   markers,
   markerTarget,
   onMarkerPlace,
   bodyProfile,
+  videoRef,
+  videoUrl,
+  videoName,
+  currentTime,
+  setCurrentTime,
+  selectedPoint,
+  onVideoClickSelectPerson,
+  trackedFrames,
+  currentTrackedFrame,
+  trackingMessage,
+  trackingProgress,
+  isTracking,
+  isSmoothingEnabled,
+  setIsSmoothingEnabled,
+  runTracking,
+  formResult,
+  peakFrame,
+  peakTime,
+  isAnalyzingForm,
+  formMessage,
+  analyzeForm,
 }: Props) {
-  const {
-    videoRef,
-    videoUrl,
-    videoName,
-    currentTime,
-    setCurrentTime,
-    loadFile,
-  } = useVideoSource();
-
-  const { selectedPoint, selectPerson, resetSelectedPerson } =
-    useSelectedPerson();
-
   const currentFrame = Math.round(currentTime * fps);
 
-  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    loadFile(file);
-    resetSelectedPerson();
-  };
+  // ref.current はレンダー中に読まないため、動画の実寸は
+  // onLoadedMetadata で state に取り込んでからマーカー位置計算に使う。
+  const [videoNaturalSize, setVideoNaturalSize] = useState<{ width: number; height: number } | null>(
+    null
+  );
 
   const handleVideoClick = (e: React.MouseEvent<HTMLVideoElement>) => {
     const video = videoRef.current;
@@ -76,13 +111,11 @@ export default function VideoPlayer({
     };
 
     onMarkerPlace(markerTarget, point);
-    selectPerson(e, video);
+    onVideoClickSelectPerson(e, video);
   };
 
   const getMarkerStyle = (point: { x: number; y: number }) => {
-    const video = videoRef.current;
-
-    if (!video || !video.videoWidth || !video.videoHeight) {
+    if (!videoNaturalSize) {
       return {
         left: "0%",
         top: "0%",
@@ -90,147 +123,147 @@ export default function VideoPlayer({
     }
 
     return {
-      left: `${(point.x / video.videoWidth) * 100}%`,
-      top: `${(point.y / video.videoHeight) * 100}%`,
+      left: `${(point.x / videoNaturalSize.width) * 100}%`,
+      top: `${(point.y / videoNaturalSize.height) * 100}%`,
     };
   };
 
+  if (!videoUrl) return null;
+
   return (
     <section>
-      <h2>動画</h2>
+      <p style={{ fontSize: 13, color: colors.bodyText, marginBottom: 8 }}>{videoName}</p>
 
-      <input
-        type="file"
-        accept="video/*"
-        onChange={handleVideoUpload}
-        style={{ fontSize: 16 }}
-      />
+      <p style={{ fontSize: 12, color: colors.bodyText, marginBottom: 8 }}>
+        動画内の選手をクリックして選択してください（現在のタップ対象：
+        <b style={{ color: colors.titleText }}>{markerLabels[markerTarget]}</b>）
+      </p>
 
-      <div style={{ marginTop: 8 }}>
-        <label>
-          FPS：
-          <input
-            type="number"
-            value={fps}
-            onChange={(e) => onFpsChange(Number(e.target.value))}
-            style={numberInputStyle}
+      <div style={{ position: "relative", width: "100%" }}>
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          controls
+          playsInline
+          style={{
+            width: "100%",
+            borderRadius: radius.lg,
+            background: "#000",
+            display: "block",
+          }}
+          onClick={handleVideoClick}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => {
+            setCurrentTime(e.currentTarget.currentTime);
+            setVideoNaturalSize({
+              width: e.currentTarget.videoWidth,
+              height: e.currentTarget.videoHeight,
+            });
+          }}
+        />
+
+        {selectedPoint && videoNaturalSize && (
+          <div
+            style={{
+              position: "absolute",
+              left: `${(selectedPoint.x / videoNaturalSize.width) * 100}%`,
+              top: `${(selectedPoint.y / videoNaturalSize.height) * 100}%`,
+              transform: "translate(-50%, -50%)",
+              pointerEvents: "none",
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
+              border: `2px solid ${colors.accent}`,
+              boxShadow: "0 0 0 3px rgba(229,57,53,0.2)",
+            }}
           />
-        </label>
+        )}
+
+        {Object.entries(markers).map(([key, point]) => {
+          if (!point) return null;
+
+          const target = key as MarkerTarget;
+          const position = getMarkerStyle(point);
+
+          return (
+            <div
+              key={target}
+              style={{
+                position: "absolute",
+                left: position.left,
+                top: position.top,
+                transform: "translate(-50%, -50%)",
+                pointerEvents: "none",
+                zIndex: 2,
+              }}
+            >
+              <div
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: "50%",
+                  background: target === markerTarget ? colors.accent : "#00b8d9",
+                  border: "2px solid #fff",
+                  boxShadow: "0 0 6px rgba(0,0,0,0.5)",
+                }}
+              />
+
+              <div
+                style={{
+                  marginTop: 2,
+                  padding: "2px 5px",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.7)",
+                  color: "#fff",
+                  fontSize: 11,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {markerLabels[target]}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      {videoUrl && (
-        <>
-          <p style={{ fontSize: 14 }}>{videoName}</p>
+      <div style={{ marginTop: 8, fontSize: 12, color: colors.bodyText, display: "flex", gap: 16 }}>
+        <span>現在時刻：{currentTime.toFixed(3)} 秒</span>
+        <span>現在フレーム：{currentFrame} F</span>
+      </div>
 
-          <p style={{ fontSize: 13 }}>
-            現在のタップ対象：<b>{markerLabels[markerTarget]}</b>
-          </p>
+      <FrameStepControls
+        videoRef={videoRef}
+        fps={fps}
+        onTimeSave={onTimeSave}
+        onStep={setCurrentTime}
+      />
 
-          <div style={{ position: "relative", width: "100%" }}>
-            <video
-              ref={videoRef}
-              src={videoUrl}
-              controls
-              playsInline
-              style={{
-                width: "100%",
-                borderRadius: 12,
-                background: "#000",
-                display: "block",
-              }}
-              onClick={handleVideoClick}
-              onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-              onLoadedMetadata={(e) =>
-                setCurrentTime(e.currentTarget.currentTime)
-              }
-            />
+      <hr style={{ margin: "16px 0", border: "none", borderTop: `1px solid ${colors.border}` }} />
 
-            {Object.entries(markers).map(([key, point]) => {
-              if (!point) return null;
+      <TrackingSection
+        videoRef={videoRef}
+        bodyProfile={bodyProfile}
+        trackedFrames={trackedFrames}
+        currentTrackedFrame={currentTrackedFrame}
+        trackingMessage={trackingMessage}
+        trackingProgress={trackingProgress}
+        isTracking={isTracking}
+        isSmoothingEnabled={isSmoothingEnabled}
+        setIsSmoothingEnabled={setIsSmoothingEnabled}
+        runTracking={runTracking}
+      />
 
-              const target = key as MarkerTarget;
-              const position = getMarkerStyle(point);
+      <hr style={{ margin: "16px 0", border: "none", borderTop: `1px solid ${colors.border}` }} />
 
-              return (
-                <div
-                  key={target}
-                  style={{
-                    position: "absolute",
-                    left: position.left,
-                    top: position.top,
-                    transform: "translate(-50%, -50%)",
-                    pointerEvents: "none",
-                    zIndex: 2,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 16,
-                      height: 16,
-                      borderRadius: "50%",
-                      background: target === markerTarget ? "#ff1744" : "#00e5ff",
-                      border: "2px solid #fff",
-                      boxShadow: "0 0 6px rgba(0,0,0,0.6)",
-                    }}
-                  />
-
-                  <div
-                    style={{
-                      marginTop: 2,
-                      padding: "2px 5px",
-                      borderRadius: 6,
-                      background: "rgba(0,0,0,0.7)",
-                      color: "#fff",
-                      fontSize: 11,
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {markerLabels[target]}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div style={{ marginTop: 8, fontSize: 14 }}>
-            <div>現在時刻：{currentTime.toFixed(3)} 秒</div>
-            <div>現在フレーム：{currentFrame} F</div>
-            <div>
-              選択人物：
-              {selectedPoint
-                ? `x=${selectedPoint.x.toFixed(0)}, y=${selectedPoint.y.toFixed(0)}`
-                : "未選択"}
-            </div>
-          </div>
-
-          <FrameStepControls
-            videoRef={videoRef}
-            fps={fps}
-            onTimeSave={onTimeSave}
-            onStep={setCurrentTime}
-          />
-
-          <hr />
-
-          <TrackingSection
-            key={`tracking-${videoUrl}`}
-            videoRef={videoRef}
-            fps={fps}
-            currentTime={currentTime}
-            selectedPoint={selectedPoint}
-            bodyProfile={bodyProfile}
-          />
-
-          <hr />
-
-          <FormAnalysisSection
-            key={`form-${videoUrl}`}
-            videoRef={videoRef}
-            fps={fps}
-            onPeakDetected={onPeakDetected}
-          />
-        </>
-      )}
+      <FormAnalysisSection
+        onPeakDetected={onPeakDetected}
+        formResult={formResult}
+        peakFrame={peakFrame}
+        peakTime={peakTime}
+        isAnalyzing={isAnalyzingForm}
+        message={formMessage}
+        analyzeForm={analyzeForm}
+      />
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { TrackedFrame } from "../ai/trackingAnalyzer";
 
 type Props = {
@@ -17,19 +17,19 @@ type HistoryItem = {
 
 const STORAGE_KEY = "jump_analyzer_motion_history";
 
+function loadHistory(): HistoryItem[] {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return [];
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
 export default function MotionHistoryPanel({ frames }: Props) {
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-
-  useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-
-    try {
-      setHistory(JSON.parse(raw));
-    } catch {
-      setHistory([]);
-    }
-  }, []);
+  const [history, setHistory] = useState<HistoryItem[]>(loadHistory);
 
   const saveCurrent = () => {
     const item = createHistoryItem(frames);
