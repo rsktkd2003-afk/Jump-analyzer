@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# node_modules から predev/prebuild で再生成される MediaPipe WASM
+# (public/models/*.task はオフライン用に一度だけ取得した資産のためコミット対象)
+public/mediapipe/wasm/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

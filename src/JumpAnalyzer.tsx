@@ -4,6 +4,8 @@ import MarkerToolbar from "./components/MarkerToolbar";
 import ResultCard from "./components/ResultCard";
 import VideoPlayer from "./components/VideoPlayer";
 import HistoryList from "./components/HistoryList";
+import InstallPwaBanner from "./components/InstallPwaBanner";
+import PwaStatusToast from "./components/PwaStatusToast";
 
 import type { MarkerTarget, Markers } from "./types/measurement";
 import type { MeasurementHistoryItem } from "./types/history";
@@ -246,6 +248,8 @@ function JumpAnalyzer() {
     >
       <h1 style={{ fontSize: 24 }}>🏐 Jump Analyzer</h1>
 
+      <InstallPwaBanner />
+
       <section>
         <label>
           身長(cm)：
@@ -462,6 +466,8 @@ function JumpAnalyzer() {
       <hr />
 
       <HistoryList items={history} onClear={handleClearHistory} />
+
+      <PwaStatusToast />
     </main>
   );
 }

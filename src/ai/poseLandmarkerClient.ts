@@ -8,11 +8,12 @@ import {
   PoseLandmarker,
 } from "@mediapipe/tasks-vision";
 
-const VISION_WASM_URL =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+// オフライン動作のため、WASMとモデルはCDN/外部ストレージではなく
+// public/ 配下にローカル配置したものを読み込む。
+// import.meta.env.BASE_URL を使うことで、デプロイ先のルートパスに依存しない。
+const VISION_WASM_URL = `${import.meta.env.BASE_URL}mediapipe/wasm`;
 
-const POSE_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task";
+const POSE_MODEL_URL = `${import.meta.env.BASE_URL}models/pose_landmarker_full.task`;
 
 // 複数人物対応で追跡人数を増やす場合はここを変更する
 const MAX_DETECTABLE_POSES = 4;
