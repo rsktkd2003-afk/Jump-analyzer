@@ -135,4 +135,51 @@ describe("detectJumpEvents", () => {
       1.2
     );
   });
+
+  it("補正後も1.2秒を超える非現実的な滞空時間は計測不能にする", () => {
+    const offsets = [
+      0,
+      0,
+      0,
+      0,
+      10,
+      0,
+      -30,
+      -60,
+      -90,
+      -110,
+      -110,
+      -110,
+      -110,
+      -110,
+      -110,
+      -110,
+      -110,
+      -110,
+      -110,
+      -90,
+      -70,
+      -50,
+      -30,
+      -10,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    ];
+    const frames = offsets.map((offset, index) => createFrame(index, offset));
+
+    const result = detectJumpEvents(frames);
+
+    expect(result).not.toBeNull();
+    expect(result?.valid).toBe(true);
+    expect(result?.landingIndex).toBeGreaterThan(result?.takeoffIndex ?? -1);
+    expect(
+      frames[result?.landingIndex ?? 0].time -
+        frames[result?.takeoffIndex ?? 0].time
+    ).toBeGreaterThan(1.2);
+    expect(result?.airTimeSec).toBeNull();
+  });
 });

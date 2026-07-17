@@ -39,12 +39,13 @@ describe("formSummary", () => {
     expect(scoreFromStars(3.333)).toBe(67);
   });
 
-  it("測定できたカテゴリだけで総合スコアを算出する", () => {
+  it("測定できたカテゴリのうち着地を除いて総合スコアを算出する", () => {
     const summary = buildFormSummary([
       feature("approach.speed", 4),
       feature("takeoff.contactTimeSec", 0.36),
       feature("air.timeSec", 0.42),
       feature("arm.swingVelocity", 2.5),
+      feature("landing.impactIndex", 9.1),
       feature("unsupported.metric", 999),
     ]);
 
@@ -53,13 +54,16 @@ describe("formSummary", () => {
       1,
       1,
       1,
-      0,
+      1,
     ]);
     expect(summary.overallStars).toBe(3.5);
     expect(summary.overallScore).toBe(70);
     expect(summary.rank).toBe("B");
     expect(summary.strengths).toHaveLength(2);
-    expect(summary.improvements).toHaveLength(2);
+    expect(summary.improvements).toHaveLength(3);
+    expect(
+      summary.categories.find((category) => category.key === "landing")?.score
+    ).toBe(20);
   });
 
   it("特徴量がない場合はスコアとランクを算出しない", () => {

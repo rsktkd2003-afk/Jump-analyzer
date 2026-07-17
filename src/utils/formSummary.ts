@@ -17,6 +17,13 @@ export const FORM_CATEGORY_LABELS: Record<FormCategoryKey, string> = {
   landing: "着地",
 };
 
+/**
+ * 着地は安全性・改善点として評価表示するが、スパイク動作の総合スコアには含めない。
+ */
+export function isOverallScoreCategory(key: FormCategoryKey): boolean {
+  return key !== "landing";
+}
+
 const CATEGORY_BY_FEATURE_KEY: Record<string, FormCategoryKey> = {
   "approach.speed": "approach",
   "takeoff.kneeMinAngle": "takeoff",
@@ -119,7 +126,9 @@ export function buildFormSummary(features: Feature[]): FormSummary {
     };
   });
 
-  const categoriesWithData = categories.filter((c) => c.stars !== null);
+  const categoriesWithData = categories.filter(
+    (c) => c.stars !== null && isOverallScoreCategory(c.key)
+  );
   const overallStars =
     categoriesWithData.length > 0
       ? categoriesWithData.reduce((sum, c) => sum + (c.stars ?? 0), 0) / categoriesWithData.length

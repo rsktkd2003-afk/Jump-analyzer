@@ -14,7 +14,7 @@ import type {
  * 今後スコア計算ロジックを変更した場合はここを更新し、
  * 異なるバージョン同士の比較には注意表示を出す。
  */
-export const ANALYSIS_VERSION = "1.0.0";
+export const ANALYSIS_VERSION = "1.1.0";
 
 export type AnalysisMetrics = {
   maxReachCm: number | null;

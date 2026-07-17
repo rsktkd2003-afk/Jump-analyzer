@@ -13,13 +13,17 @@ const normalSettings: CaptureSettings = {
   distance: "normal",
 };
 
-function feature(confidence: number): Feature {
+function feature(
+  confidence: number,
+  key = "approach.speed",
+  value = 4
+): Feature {
   return {
-    key: "approach.speed",
-    label: "助走速度",
+    key,
+    label: key,
     phase: "approach",
     region: "centerOfMass",
-    value: 4,
+    value,
     unit: "normPxPerSec",
     confidence,
   };
@@ -60,6 +64,26 @@ describe("analysisConfidence", () => {
     expect(summary.strengths).toEqual([]);
     expect(summary.improvements).toEqual([]);
     expect(summary.confidenceWarnings.join("\n")).toContain("評価対象から除外");
+  });
+
+  it("着地評価を表示に残しつつ総合スコアから除外する", () => {
+    const summary = buildConfidenceAwareSummary(
+      [feature(1), feature(1, "landing.impactIndex", 9.1)],
+      normalSettings,
+      60
+    );
+    const landing = summary.categories.find(
+      (category) => category.key === "landing"
+    );
+
+    expect(landing?.status).toBe("measured");
+    expect(landing?.score).toBe(20);
+    expect(summary.overallStars).toBe(5);
+    expect(summary.overallScore).toBe(100);
+    expect(summary.rank).toBe("S");
+    expect(summary.improvements.some((item) => item.category === "landing")).toBe(
+      true
+    );
   });
 
   it("撮影条件・参考値・フレーム不足の警告を組み立てる", () => {
