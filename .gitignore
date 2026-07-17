@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Firebase CLIが生成するローカルキャッシュ
+.firebase/
+
 # node_modules から predev/prebuild で再生成される MediaPipe WASM
 # (public/models/*.task はオフライン用に一度だけ取得した資産のためコミット対象)
 public/mediapipe/wasm/
