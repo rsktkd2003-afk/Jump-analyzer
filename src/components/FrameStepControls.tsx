@@ -1,4 +1,5 @@
 import { buttonStyle } from "../styles/ui";
+import { computeSteppedTime } from "../utils/manualMeasurement";
 
 export type TimeSaveLabel = "takeoff" | "landing";
 
@@ -17,14 +18,16 @@ export default function FrameStepControls({
   onTimeSave,
   onStep,
 }: Props) {
-  const stepFrame = (dir: number) => {
+  const stepFrame = (dir: -1 | 1) => {
     const video = videoRef.current;
     if (!video) return;
 
-    const nextTime = Math.max(
-      0,
-      Math.min(video.duration || 0, video.currentTime + dir / fps)
-    );
+    const nextTime = computeSteppedTime({
+      currentTime: video.currentTime,
+      duration: video.duration,
+      fps,
+      direction: dir,
+    });
 
     video.currentTime = nextTime;
     onStep?.(nextTime);

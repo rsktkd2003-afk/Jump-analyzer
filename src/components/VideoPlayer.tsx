@@ -11,6 +11,7 @@ import type { MarkerTarget, Markers } from "../types/measurement";
 import type { BodyProfile } from "../analysis/evaluation";
 import type { TrackedFrame } from "../ai/poseAnalyzer";
 import type { JumpFormAnalysisResult } from "../ai/poseAnalyzer";
+import { toNaturalPoint } from "../utils/manualMeasurement";
 
 export type { TimeSaveLabel };
 
@@ -105,10 +106,11 @@ export default function VideoPlayer({
 
     const rect = video.getBoundingClientRect();
 
-    const point = {
-      x: ((e.clientX - rect.left) / rect.width) * video.videoWidth,
-      y: ((e.clientY - rect.top) / rect.height) * video.videoHeight,
-    };
+    const point = toNaturalPoint(
+      { x: e.clientX, y: e.clientY },
+      { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      { width: video.videoWidth, height: video.videoHeight }
+    );
 
     onMarkerPlace(markerTarget, point);
     onVideoClickSelectPerson(e, video);
