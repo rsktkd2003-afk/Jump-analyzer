@@ -1,73 +1,69 @@
-# React + TypeScript + Vite
+# Jump Analyzer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+バレーボールのジャンプ動作を動画から解析するWebアプリです。React、TypeScript、MediaPipeを使用し、動画は原則としてブラウザ内で処理します。Googleログイン時は、ユーザーが保存を選んだ解析結果だけをFirestoreへ保存します。
 
-Currently, two official plugins are available:
+## 主な技術
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- React 19 / TypeScript / Vite 8
+- MediaPipe Tasks Vision
+- Firebase Authentication / Firestore / Hosting
+- vite-plugin-pwa
+- Vitest
 
-## React Compiler
+## 必要な環境
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Node.js 20
+- npm
+- Firebase CLI（本番へデプロイする場合）
 
-## Expanding the ESLint configuration
+## 初回セットアップ
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+git clone https://github.com/rsktkd2003-afk/Jump-analyzer.git
+cd Jump-analyzer
+Copy-Item .env.example .env.local
+npm ci
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+`.env.local`へFirebase Webアプリの設定値を入力してください。未設定でも動画解析は利用できますが、ログインと履歴保存は無効になります。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 開発用コマンド
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+npm run dev
+npm run lint
+npm run test
+npm run build
+npm run check
 ```
+
+`npm run check`は、lint、単体テスト、ビルドを順番に実行します。
+
+## 本番反映
+
+`main`の最新状態で確認してから実行します。
+
+```powershell
+git switch main
+git pull
+npm ci
+npm run check
+npx firebase-tools deploy --only hosting
+```
+
+## 重要な資料
+
+- [開発フロー](DEVELOPMENT_WORKFLOW.md)
+- [解析・評価仕様](docs/ANALYSIS_SPEC.md)
+- [精度検証ガイド](docs/VALIDATION_GUIDE.md)
+- [リリースチェックリスト](docs/RELEASE_CHECKLIST.md)
+- [運用・障害対応](docs/OPERATIONS.md)
+- [セキュリティ方針](SECURITY.md)
+- [プライバシーポリシー案](PRIVACY_POLICY.md)
+
+## 現在の注意点
+
+- 解析値とフォーム評価は、撮影角度・画質・遮蔽・フレームレートの影響を受けます。
+- 評価は競技改善の参考情報であり、医療上の診断ではありません。
+- 評価基準を変更する場合は、`ANALYSIS_VERSION`の更新と検証動画による回帰確認が必要です。

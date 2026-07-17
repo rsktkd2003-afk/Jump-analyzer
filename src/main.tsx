@@ -5,9 +5,12 @@
  import './index.css'
  import './styles/responsive.css'
  import JumpAnalyzer from './JumpAnalyzer.tsx'
+ import AppErrorBoundary from './components/AppErrorBoundary.tsx'
 
  createRoot(document.getElementById('root')!).render(
    <StrictMode>
+      <AppErrorBoundary>
         <JumpAnalyzer />
+      </AppErrorBoundary>
    </StrictMode>,
  )
