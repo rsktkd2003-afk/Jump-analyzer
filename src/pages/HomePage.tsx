@@ -17,7 +17,7 @@ export default function HomePage({ userName, history, onStartAnalyze, onOpenHist
   const latest = history[0];
 
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <h1 style={{ fontSize: 22 }}>こんにちは、{userName}さん！</h1>
@@ -43,10 +43,10 @@ export default function HomePage({ userName, history, onStartAnalyze, onOpenHist
       </div>
 
       <div
+        className="grid-2col-hero"
         style={{
           marginTop: 20,
           display: "grid",
-          gridTemplateColumns: "1.3fr 1fr",
           gap: 16,
           alignItems: "stretch",
         }}

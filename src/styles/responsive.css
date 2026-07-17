@@ -1,0 +1,200 @@
+/* =============================================================
+   レスポンシブ対応の共通スタイル（唯一のブレークポイント定義元）。
+   ブレークポイント：
+     - 480px以下   … 小型スマートフォン
+     - 767px以下   … スマートフォン
+     - 768〜1023px … タブレット
+     - 1024px以上  … PC
+   PC版（1024px以上）の見た目は変えず、既存のインラインstyleを
+   そのまま維持する。ここでは「幅によって変えたいプロパティ」だけを
+   クラス経由で上書きする（インラインstyleは同一プロパティに対して
+   常にCSSクラスより優先されるため、対象プロパティは各コンポーネント側の
+   インラインstyleから外してある）。
+   ============================================================= */
+
+/* ---------- ページ共通の左右余白 ---------- */
+.page-container {
+  padding: 24px 28px 48px;
+}
+
+@media (max-width: 767px) {
+  .page-container {
+    padding: 16px 14px 32px;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-container {
+    padding: 14px 12px 28px;
+  }
+}
+
+/* ---------- アプリ全体のシェル（サイドバー＋メイン） ---------- */
+.app-shell {
+  width: 100%;
+  min-height: 100svh;
+  display: flex;
+}
+
+/* ---------- サイドバー（PC：常時表示 / モバイル：オフキャンバス） ---------- */
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100svh;
+}
+
+@media (max-width: 1023px) {
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100dvh;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .app-sidebar.app-sidebar--open {
+    transform: translateX(0);
+  }
+}
+
+.app-sidebar-close-btn {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .app-sidebar-close-btn {
+    display: inline-flex;
+  }
+}
+
+.sidebar-overlay {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 10, 15, 0.5);
+    z-index: 999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .sidebar-overlay.sidebar-overlay--visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* ---------- モバイル用ヘッダー（ハンバーガー＋タイトル） ---------- */
+.mobile-topbar {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #fff;
+    border-bottom: 1px solid #ebedf3;
+    position: sticky;
+    top: 0;
+    z-index: 500;
+    box-sizing: border-box;
+  }
+}
+
+.mobile-topbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  border: 1px solid #ebedf3;
+  background: #fff;
+  color: #14151a;
+  cursor: pointer;
+}
+
+.mobile-topbar-title {
+  font-weight: 800;
+  font-size: 15px;
+  color: #14151a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ---------- PC専用に固定比率だった2カラムグリッド ---------- */
+/* HomePage: CTAカード＋最近の解析カード */
+.grid-2col-hero {
+  grid-template-columns: 1.3fr 1fr;
+}
+
+/* ResultPage: フォーム評価＋AI改善ポイント */
+.grid-2col-eval {
+  grid-template-columns: minmax(280px, 1.1fr) minmax(280px, 1fr);
+}
+
+/* ComparePage: 今回の解析＋前回の解析 */
+.grid-2col-picker {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 767px) {
+  .grid-2col-hero,
+  .grid-2col-eval,
+  .grid-2col-picker {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- 固定幅グラフ（Canvas）の横スクロール対応 ---------- */
+/* MotionGraph / CenterOfMassPanel は文字を含む固定解像度Canvasを
+   描画している。描画ロジックは変更せず、PCでは幅いっぱいに縮小表示、
+   モバイルでは実寸のまま描画してパネル内だけ横スクロールさせることで
+   文字が読めなくなるのを防ぐ（ページ全体は横スクロールしない）。 */
+.chart-scroll-x {
+  width: 100%;
+  overflow-x: visible;
+  border-radius: 12px;
+}
+
+.chart-canvas {
+  display: block;
+  width: 100%;
+}
+
+@media (max-width: 767px) {
+  .chart-scroll-x {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .chart-canvas {
+    width: auto;
+    max-width: none;
+  }
+}
+
+/* ---------- タップ領域確保 ---------- */
+@media (max-width: 767px) {
+  .tap-target-row {
+    gap: 10px;
+  }
+
+  .tap-target-row > button {
+    min-height: 44px;
+  }
+}

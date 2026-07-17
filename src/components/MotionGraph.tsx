@@ -148,14 +148,13 @@ export default function MotionGraph({ frames }: Props) {
 
   return (
     <div style={{ marginTop: 12 }}>
-      <canvas
-        ref={canvasRef}
-        style={{
-          width: "100%",
-          borderRadius: 12,
-          background: "#f3f3f3",
-        }}
-      />
+      <div className="chart-scroll-x" style={{ background: "#f3f3f3" }}>
+        <canvas
+          ref={canvasRef}
+          className="chart-canvas"
+          style={{ background: "#f3f3f3" }}
+        />
+      </div>
 
       {stats && (
         <div style={cardStyle}>

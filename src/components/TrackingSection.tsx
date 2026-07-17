@@ -104,17 +104,17 @@ export default function TrackingSection({
 
       {trackedFrames.length > 0 && (
         <>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               onClick={() => setIsCropMode((prev) => !prev)}
-              style={buttonStyle}
+              style={{ ...buttonStyle, flex: "1 1 auto" }}
             >
               {isCropMode ? "全体表示" : "切り抜き表示"}
             </button>
 
             <button
               onClick={() => setShowSkeleton((prev) => !prev)}
-              style={buttonStyle}
+              style={{ ...buttonStyle, flex: "1 1 auto" }}
             >
               {showSkeleton ? "骨格OFF" : "骨格ON"}
             </button>

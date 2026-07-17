@@ -132,7 +132,7 @@ export default function VideoPlayer({
 
   return (
     <section>
-      <p style={{ fontSize: 13, color: colors.bodyText, marginBottom: 8 }}>{videoName}</p>
+      <p style={{ fontSize: 13, color: colors.bodyText, marginBottom: 8, overflowWrap: "anywhere" }}>{videoName}</p>
 
       <p style={{ fontSize: 12, color: colors.bodyText, marginBottom: 8 }}>
         動画内の選手をクリックして選択してください（現在のタップ対象：

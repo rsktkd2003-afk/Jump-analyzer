@@ -116,7 +116,7 @@ export default function AnalyzePage(props: Props) {
     : 0;
 
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
         <button
           onClick={props.onBack}
@@ -124,8 +124,9 @@ export default function AnalyzePage(props: Props) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 32,
-            height: 32,
+            width: 40,
+            height: 40,
+            flexShrink: 0,
             borderRadius: radius.sm,
             border: `1px solid ${colors.border}`,
             background: "#fff",
@@ -486,7 +487,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function Stepper({ active }: { active: 1 | 2 | 3 }) {
   const steps = ["動画を選択", "設定を入力", "解析開始"];
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", rowGap: 8, gap: 8 }}>
       {steps.map((label, index) => {
         const stepNum = index + 1;
         const isActive = stepNum === active;

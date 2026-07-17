@@ -47,8 +47,10 @@ export const spacing = {
   xxl: 32,
 };
 
+// padding はブレークポイントごとに変える必要があるため
+// src/styles/responsive.css の .page-container クラス側で指定する。
+// （利用箇所では style={page} と className="page-container" を併用する）
 export const page: CSSProperties = {
-  padding: "24px 28px 48px",
   maxWidth: 1400,
   margin: "0 auto",
   width: "100%",
@@ -120,7 +122,7 @@ export const ghostButton: CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   gap: 6,
-  padding: "8px 14px",
+  padding: "10px 16px",
   borderRadius: radius.pill,
   border: `1px solid ${colors.border}`,
   background: "#fff",
@@ -135,7 +137,8 @@ export const inputStyle: CSSProperties = {
   padding: "10px 12px",
   borderRadius: radius.sm,
   border: `1px solid ${colors.border}`,
-  fontSize: 14,
+  // 16px未満だとiOS Safariが入力欄フォーカス時に自動ズームするため16pxを基本にする。
+  fontSize: 16,
   color: colors.titleText,
   background: "#fff",
   boxSizing: "border-box",

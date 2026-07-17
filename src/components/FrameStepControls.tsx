@@ -41,21 +41,21 @@ export default function FrameStepControls({
   return (
     <>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={() => stepFrame(-1)} style={buttonStyle}>
+        <button onClick={() => stepFrame(-1)} style={{ ...buttonStyle, flex: 1, marginTop: 0 }}>
           -1F
         </button>
 
-        <button onClick={() => stepFrame(1)} style={buttonStyle}>
+        <button onClick={() => stepFrame(1)} style={{ ...buttonStyle, flex: 1, marginTop: 0 }}>
           +1F
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={() => saveTime("takeoff")} style={buttonStyle}>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button onClick={() => saveTime("takeoff")} style={{ ...buttonStyle, flex: 1, marginTop: 0 }}>
           離地を保存
         </button>
 
-        <button onClick={() => saveTime("landing")} style={buttonStyle}>
+        <button onClick={() => saveTime("landing")} style={{ ...buttonStyle, flex: 1, marginTop: 0 }}>
           着地を保存
         </button>
       </div>

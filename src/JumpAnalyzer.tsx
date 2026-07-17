@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import Sidebar from "./components/layout/Sidebar";
 import PwaStatusToast from "./components/PwaStatusToast";
@@ -9,7 +9,7 @@ import ComparePage from "./pages/ComparePage";
 import HistoryPage from "./pages/HistoryPage";
 import ComingSoonPage from "./pages/ComingSoonPage";
 import SettingsPage from "./pages/SettingsPage";
-import { PlayersIcon, TeamIcon } from "./components/layout/Icons";
+import { PlayersIcon, TeamIcon, MenuIcon } from "./components/layout/Icons";
 
 import type { MarkerTarget, Markers } from "./types/measurement";
 import type { MeasurementHistoryItem } from "./types/history";
@@ -58,8 +58,41 @@ const initialMarkers: Markers = {
 const USER_NAME = "ゲスト";
 const USER_ROLE = "コーチ";
 
+const MOBILE_PAGE_TITLES: Record<PageId, string> = {
+  home: "ホーム",
+  analyze: "解析",
+  result: "解析結果",
+  compare: "比較する",
+  history: "履歴",
+  players: "選手",
+  team: "チーム",
+  settings: "設定",
+};
+
 function JumpAnalyzer() {
   const [page, setPage] = useState<PageId>("home");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+
+    document.body.style.overflow = "hidden";
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsSidebarOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isSidebarOpen]);
+
+  // ページ遷移時（サイドバー以外からの遷移も含む）はモバイルメニューを閉じる。
+  useEffect(() => {
+    setIsSidebarOpen(false);
+  }, [page]);
 
   const [fps, setFps] = useState(60);
   const [knownCm, setKnownCm] = useState(45);
@@ -306,10 +339,36 @@ function JumpAnalyzer() {
   };
 
   return (
-    <div style={{ display: "flex", width: "100%", minHeight: "100svh" }}>
-      <Sidebar page={page} onNavigate={setPage} userName={USER_NAME} userRole={USER_ROLE} />
+    <div className="app-shell">
+      <Sidebar
+        page={page}
+        onNavigate={setPage}
+        userName={USER_NAME}
+        userRole={USER_ROLE}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
+      />
+
+      <div
+        className={`sidebar-overlay${isSidebarOpen ? " sidebar-overlay--visible" : ""}`}
+        onClick={() => setIsSidebarOpen(false)}
+        aria-hidden="true"
+      />
 
       <main style={{ flex: 1, minWidth: 0, background: colors.bg }}>
+        <div className="mobile-topbar">
+          <button
+            type="button"
+            className="mobile-topbar-btn"
+            onClick={() => setIsSidebarOpen(true)}
+            aria-label="メニューを開く"
+            aria-expanded={isSidebarOpen}
+          >
+            <MenuIcon size={20} />
+          </button>
+          <div className="mobile-topbar-title">{MOBILE_PAGE_TITLES[page]}</div>
+        </div>
+
         {page === "home" && (
           <HomePage
             userName={USER_NAME}

@@ -2,6 +2,7 @@ import type { PageId } from "../../types/navigation";
 import { colors } from "../../styles/theme";
 import {
   AnalyzeIcon,
+  CloseIcon,
   HistoryIcon,
   HomeIcon,
   PlayersIcon,
@@ -35,13 +36,22 @@ type Props = {
   onNavigate: (page: PageId) => void;
   userName: string;
   userRole: string;
+  isOpen: boolean;
+  onClose: () => void;
 };
 
-export default function Sidebar({ page, onNavigate, userName, userRole }: Props) {
+export default function Sidebar({ page, onNavigate, userName, userRole, isOpen, onClose }: Props) {
   const activePage = activeGroup[page] ?? page;
+
+  const handleNavigate = (id: PageId) => {
+    onNavigate(id);
+    onClose();
+  };
 
   return (
     <aside
+      className={`app-sidebar${isOpen ? " app-sidebar--open" : ""}`}
+      aria-label="メインナビゲーション"
       style={{
         width: 232,
         flexShrink: 0,
@@ -50,42 +60,63 @@ export default function Sidebar({ page, onNavigate, userName, userRole }: Props)
         flexDirection: "column",
         padding: "20px 14px",
         boxSizing: "border-box",
-        position: "sticky",
-        top: 0,
-        height: "100svh",
       }}
     >
       <div
         style={{
           display: "flex",
           alignItems: "center",
+          justifyContent: "space-between",
           gap: 10,
           padding: "6px 10px 22px",
         }}
       >
-        <div
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 9,
+              background: colors.accent,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#fff",
+              fontSize: 16,
+            }}
+          >
+            🏐
+          </div>
+          <div style={{ lineHeight: 1.15 }}>
+            <div style={{ color: "#fff", fontWeight: 800, fontSize: 14, letterSpacing: 0.3 }}>
+              JUMP
+            </div>
+            <div style={{ color: colors.sidebarText, fontWeight: 700, fontSize: 11, letterSpacing: 1 }}>
+              ANALYZER
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          className="app-sidebar-close-btn"
+          onClick={onClose}
+          aria-label="メニューを閉じる"
           style={{
-            width: 32,
-            height: 32,
-            borderRadius: 9,
-            background: colors.accent,
-            display: "flex",
             alignItems: "center",
             justifyContent: "center",
+            width: 36,
+            height: 36,
+            borderRadius: 10,
+            border: "none",
+            background: "rgba(255,255,255,0.08)",
             color: "#fff",
-            fontSize: 16,
+            cursor: "pointer",
+            flexShrink: 0,
           }}
         >
-          🏐
-        </div>
-        <div style={{ lineHeight: 1.15 }}>
-          <div style={{ color: "#fff", fontWeight: 800, fontSize: 14, letterSpacing: 0.3 }}>
-            JUMP
-          </div>
-          <div style={{ color: colors.sidebarText, fontWeight: 700, fontSize: 11, letterSpacing: 1 }}>
-            ANALYZER
-          </div>
-        </div>
+          <CloseIcon size={18} />
+        </button>
       </div>
 
       <nav style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
@@ -95,12 +126,14 @@ export default function Sidebar({ page, onNavigate, userName, userRole }: Props)
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => handleNavigate(item.id)}
+              aria-current={isActive ? "page" : undefined}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 12,
-                padding: "10px 12px",
+                padding: "12px 12px",
+                minHeight: 44,
                 borderRadius: 12,
                 border: "none",
                 background: isActive ? colors.accent : "transparent",
@@ -110,6 +143,7 @@ export default function Sidebar({ page, onNavigate, userName, userRole }: Props)
                 cursor: "pointer",
                 textAlign: "left",
                 width: "100%",
+                boxSizing: "border-box",
               }}
             >
               <Icon size={18} />

@@ -15,7 +15,7 @@ type Props = {
  */
 export default function ComingSoonPage({ title, description, icon }: Props) {
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>{title}</h1>
       <div style={{ ...card, textAlign: "center", padding: "64px 24px" }}>
         <div

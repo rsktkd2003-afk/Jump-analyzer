@@ -183,6 +183,22 @@ export function ShareIcon({ size = 16, style }: IconProps) {
   );
 }
 
+export function MenuIcon({ size = 20, style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>
+      <path d="M4 6h16M4 12h16M4 18h16" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ size = 20, style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>
+      <path d="M5 5l14 14M19 5 5 19" />
+    </svg>
+  );
+}
+
 export function TrophyIcon({ size = 20, style }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>

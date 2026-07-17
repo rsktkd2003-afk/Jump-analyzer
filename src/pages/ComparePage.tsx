@@ -77,7 +77,7 @@ export default function ComparePage({ history }: Props) {
 
   if (history.length === 0) {
     return (
-      <div style={page}>
+      <div style={page} className="page-container">
         <h1 style={{ fontSize: 20, marginBottom: 12 }}>比較する</h1>
         <p style={mutedText}>比較するにはまず解析結果を2件以上保存してください。</p>
       </div>
@@ -85,10 +85,10 @@ export default function ComparePage({ history }: Props) {
   }
 
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>比較する</h1>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid-2col-picker" style={{ display: "grid", gap: 16 }}>
         <PickerCard title="今回の解析" value={currentId} onChange={setCurrentId} history={history} accent />
         <PickerCard title="前回の解析" value={previousId} onChange={setPreviousId} history={history} />
       </div>
@@ -110,6 +110,8 @@ export default function ComparePage({ history }: Props) {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  rowGap: 4,
                   padding: "10px 0",
                   borderBottom: `1px solid ${colors.border}`,
                   fontSize: 13,

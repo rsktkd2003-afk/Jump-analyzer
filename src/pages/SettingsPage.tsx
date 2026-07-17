@@ -8,7 +8,7 @@ type Props = {
 
 export default function SettingsPage({ historyCount, onClearHistory }: Props) {
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <h1 style={{ fontSize: 20, marginBottom: 16 }}>設定</h1>
 
       <div style={card}>

@@ -121,24 +121,25 @@ export default function ResultPage({
 
   if (!videoUrl) {
     return (
-      <div style={page}>
+      <div style={page} className="page-container">
         <p style={mutedText}>解析結果がありません。先に「解析」から動画を解析してください。</p>
       </div>
     );
   }
 
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <button
             onClick={onBack}
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              width: 32,
-              height: 32,
+              width: 40,
+              height: 40,
+              flexShrink: 0,
               borderRadius: radius.sm,
               border: `1px solid ${colors.border}`,
               background: "#fff",
@@ -149,16 +150,16 @@ export default function ResultPage({
           >
             <ChevronLeftIcon size={18} />
           </button>
-          <div>
+          <div style={{ minWidth: 0 }}>
             <h1 style={{ fontSize: 20 }}>解析結果</h1>
-            <div style={{ fontSize: 12, color: colors.mutedText }}>
+            <div style={{ fontSize: 12, color: colors.mutedText, overflowWrap: "anywhere" }}>
               {videoName}
               {resultTimestamp && ` ・ ${resultTimestamp}`}
             </div>
           </div>
         </div>
 
-        <div className="no-print" style={{ display: "flex", gap: 8 }}>
+        <div className="no-print" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button style={ghostButton} onClick={onSave}>
             <SaveIcon size={14} />
             保存
@@ -228,10 +229,10 @@ export default function ResultPage({
 
       {/* フォーム評価 + AI改善ポイント */}
       <div
+        className="grid-2col-eval"
         style={{
           marginTop: 20,
           display: "grid",
-          gridTemplateColumns: "minmax(280px, 1.1fr) minmax(280px, 1fr)",
           gap: 16,
         }}
       >

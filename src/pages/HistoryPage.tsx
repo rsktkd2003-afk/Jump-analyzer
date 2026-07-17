@@ -9,10 +9,10 @@ type Props = {
 
 export default function HistoryPage({ history, onClear, onOpenCompare }: Props) {
   return (
-    <div style={page}>
+    <div style={page} className="page-container">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <h1 style={{ fontSize: 20 }}>解析履歴</h1>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {history.length > 1 && (
             <button style={secondaryButton} onClick={onOpenCompare}>
               比較する

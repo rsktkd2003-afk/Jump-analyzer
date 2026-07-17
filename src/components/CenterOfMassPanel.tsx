@@ -142,10 +142,13 @@ export default function CenterOfMassPanel({ result }: Props) {
     <section style={panelStyle}>
       <h3 style={{ marginTop: 0 }}>重心の移動グラフ</h3>
 
-      <canvas
-        ref={canvasRef}
-        style={{ width: "100%", borderRadius: 12, background: "#fafafa" }}
-      />
+      <div className="chart-scroll-x" style={{ background: "#fafafa" }}>
+        <canvas
+          ref={canvasRef}
+          className="chart-canvas"
+          style={{ background: "#fafafa" }}
+        />
+      </div>
 
       <div style={legendStyle}>
         <LegendItem color={COLOR_X} label="左右移動（＋が画面右）" />
