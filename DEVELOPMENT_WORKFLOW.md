@@ -57,6 +57,7 @@ AIには、目的・関連情報・制約・完了条件・確認方法を伝え
 
 ```powershell
 npm run lint
+npm run test
 npm run build
 npm run dev
 ```

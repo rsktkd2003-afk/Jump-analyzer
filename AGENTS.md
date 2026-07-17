@@ -26,10 +26,11 @@ Run the checks relevant to the change:
 
 ```bash
 npm run lint
+npm run test
 npm run build
 ```
 
-`package.json` currently has no automated test script. Do not claim that tests passed unless a test command actually exists and was run.
+Do not claim that a check passed unless the corresponding command was actually run successfully.
 
 For UI, authentication, video, tracking, PWA, or Firestore changes, also provide a short manual verification checklist. The developer must verify browser behavior with `npm run dev`.
 

@@ -8,6 +8,6 @@ Follow the complete repository guidance in `/AGENTS.md`.
 - Preserve the existing React, TypeScript, Vite, Firebase, MediaPipe, and PWA architecture.
 - Treat motion tracking, form evaluation, authentication, Firestore, and PWA caching as high-risk.
 - Never add secrets, tokens, passwords, or personal data.
-- Run `npm run lint` and `npm run build` when applicable.
+- Run `npm run lint`, `npm run test`, and `npm run build` when applicable.
 - Report changed files, command results, risks, and manual verification steps in Japanese.
-- Do not claim tests passed: this repository currently has no `test` script.
+- Do not claim that a check passed unless the corresponding command was actually run successfully.
