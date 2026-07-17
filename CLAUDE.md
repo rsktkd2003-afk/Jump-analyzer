@@ -8,7 +8,7 @@ Before changing code, read and follow `AGENTS.md` at the repository root.
 2. For complex or high-risk work, present a short implementation plan before editing.
 3. Ask the user when essential behavior or evaluation criteria are unclear.
 4. Make only the requested changes.
-5. Run `npm run lint` and `npm run build` when applicable.
+5. Run `npm run lint`, `npm run test`, and `npm run build` when applicable.
 6. Report changed files, check results, remaining risks, and manual verification steps in Japanese.
 
 ## Important constraints

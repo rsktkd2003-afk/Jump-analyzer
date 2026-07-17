@@ -29,3 +29,4 @@ public/mediapipe/wasm/
 
 .vercel
 .env*
+!.env.example
