@@ -10,21 +10,12 @@ import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
 import { MenuIcon } from "./components/layout/Icons";
 
-import type { MarkerTarget, Markers } from "./types/measurement";
 import type { PageId } from "./types/navigation";
-
-import {
-  calculateMaxReach,
-  calculateReachError,
-} from "./utils/jumpCalculator";
-import {
-  calculateBallSpeed,
-  calculateSpeedError,
-} from "./utils/speedCalculator";
 
 import { estimateReachFromInputs } from "./ai/reachEstimateAnalyzer";
 
 import { useVideoSource } from "./hooks/useVideoSource";
+import { useManualMeasurement } from "./hooks/useManualMeasurement";
 import { useSelectedPerson } from "./hooks/useSelectedPerson";
 import { useMotionTracking } from "./hooks/useMotionTracking";
 import { usePoseAnalysis } from "./hooks/usePoseAnalysis";
@@ -47,15 +38,6 @@ import {
 import type { AnalysisHistoryDraft } from "./types/analysisHistory";
 
 import { colors } from "./styles/theme";
-
-const initialMarkers: Markers = {
-  calibA: null,
-  calibB: null,
-  ring: null,
-  finger: null,
-  ballA: null,
-  ballB: null,
-};
 
 const MOBILE_PAGE_TITLES: Record<PageId, string> = {
   home: "ホーム",
@@ -105,19 +87,11 @@ function JumpAnalyzer() {
   const [heightCm, setHeightCm] = useState(170);
   const [standingReach, setStandingReach] = useState(214);
   const [knownMaxReach, setKnownMaxReach] = useState<number | null>(null);
-  const [target, setTarget] = useState<MarkerTarget>("calibA");
 
   const [captureSettings, setCaptureSettings] = useState<CaptureSettings>(
     DEFAULT_CAPTURE_SETTINGS
   );
   const [skillId, setSkillId] = useState<SkillId>("spikeJump");
-
-  const [markers, setMarkers] = useState<Markers>(initialMarkers);
-
-  const [timeA, setTimeA] = useState<number | null>(null);
-  const [timeB, setTimeB] = useState<number | null>(null);
-  const [frameA, setFrameA] = useState<number | null>(null);
-  const [frameB, setFrameB] = useState<number | null>(null);
 
   const [isStarting, setIsStarting] = useState(false);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
@@ -128,6 +102,8 @@ function JumpAnalyzer() {
   // ルートへ引き上げている。ロジック自体は変更していない） ----
   const { videoRef, videoUrl, videoName, currentTime, setCurrentTime, loadFile } =
     useVideoSource();
+
+  const manualMeasurement = useManualMeasurement({ knownCm, ringHeight, standingReach });
 
   const { selectedPoint, selectPerson, resetSelectedPerson } = useSelectedPerson();
 
@@ -155,6 +131,7 @@ function JumpAnalyzer() {
 
   const handleLoadVideoFile = (file: File) => {
     loadFile(file);
+    manualMeasurement.reset();
     resetSelectedPerson();
     resetTracking();
     resetPoseAnalysis();
@@ -162,56 +139,24 @@ function JumpAnalyzer() {
     setAnalyzedAt(null);
   };
 
-  const maxReach = useMemo(
-    () => calculateMaxReach({ markers, knownCm, ringHeight }),
-    [markers, knownCm, ringHeight]
-  );
-
-  const jumpHeight = useMemo(() => {
-    if (!maxReach) return null;
-    return maxReach - standingReach;
-  }, [maxReach, standingReach]);
-
-  const airTime = useMemo(() => {
-    if (timeA === null || timeB === null) return null;
-    const diff = Math.abs(timeB - timeA);
-    return diff > 0 ? diff : null;
-  }, [timeA, timeB]);
-
-  const airFrameCount = useMemo(() => {
-    if (frameA === null || frameB === null) return null;
-    const diff = Math.abs(frameB - frameA);
-    return diff > 0 ? diff : null;
-  }, [frameA, frameB]);
-
-  const estimatedJumpHeight = useMemo(() => {
-    if (!airTime) return null;
-    return ((9.81 * airTime * airTime) / 8) * 100;
-  }, [airTime]);
-
-  const reachError = useMemo(
-    () => calculateReachError(markers, knownCm),
-    [markers, knownCm]
-  );
-
-  const ballSpeed = useMemo(
-    () => calculateBallSpeed({ markers, knownCm, timeA, timeB }),
-    [markers, knownCm, timeA, timeB]
-  );
-
-  const speedError = useMemo(() => calculateSpeedError(ballSpeed), [ballSpeed]);
-
   const reachEstimate = useMemo(
     () =>
       estimateReachFromInputs({
         standingReachCm: standingReach,
         heightCm,
-        calibrationMaxReachCm: maxReach,
-        flightTimeJumpHeightCm: estimatedJumpHeight,
+        calibrationMaxReachCm: manualMeasurement.maxReach,
+        flightTimeJumpHeightCm: manualMeasurement.estimatedJumpHeight,
         knownMaxReachCm: knownMaxReach,
-        calibrationErrorCm: reachError,
+        calibrationErrorCm: manualMeasurement.reachError,
       }),
-    [standingReach, heightCm, maxReach, estimatedJumpHeight, knownMaxReach, reachError]
+    [
+      standingReach,
+      heightCm,
+      manualMeasurement.maxReach,
+      manualMeasurement.estimatedJumpHeight,
+      knownMaxReach,
+      manualMeasurement.reachError,
+    ]
   );
 
   // 自動フォーム解析結果（既存の analysis/evaluation ロジックを結果画面向けに集約表示するだけ）
@@ -219,39 +164,6 @@ function JumpAnalyzer() {
     if (trackedFrames.length < 3) return null;
     return analyze(trackedFrames, skillId);
   }, [trackedFrames, skillId]);
-
-  const handleMarkerPlace = (
-    markerTarget: MarkerTarget,
-    point: { x: number; y: number }
-  ) => {
-    setMarkers((prev) => ({
-      ...prev,
-      [markerTarget]: point,
-    }));
-  };
-
-  const handleClearMarker = (markerTarget: MarkerTarget) => {
-    setMarkers((prev) => ({
-      ...prev,
-      [markerTarget]: null,
-    }));
-  };
-
-  const handleTimeSave = (
-    label: "takeoff" | "landing",
-    time: number,
-    frame: number
-  ) => {
-    if (label === "takeoff") {
-      setTimeA(time);
-      setFrameA(frame);
-    }
-
-    if (label === "landing") {
-      setTimeB(time);
-      setFrameB(frame);
-    }
-  };
 
   const handleSaveHistory = async (userId: string, draft: AnalysisHistoryDraft) => {
     await saveAnalysisHistory(userId, draft);
@@ -270,8 +182,8 @@ function JumpAnalyzer() {
   const handleShare = async () => {
     const text = [
       "🏐 Jump Analyzer 測定結果",
-      `最高到達点：${maxReach ? `${maxReach.toFixed(1)}cm` : "-"}`,
-      `ジャンプ高：${jumpHeight ? `${jumpHeight.toFixed(1)}cm` : "-"}`,
+      `最高到達点：${manualMeasurement.maxReach ? `${manualMeasurement.maxReach.toFixed(1)}cm` : "-"}`,
+      `ジャンプ高：${manualMeasurement.jumpHeight ? `${manualMeasurement.jumpHeight.toFixed(1)}cm` : "-"}`,
       `推定最高到達点：${
         reachEstimate.estimatedMaxReachCm !== null
           ? `${reachEstimate.estimatedMaxReachCm.toFixed(1)}cm`
@@ -282,8 +194,8 @@ function JumpAnalyzer() {
           ? `${reachEstimate.estimatedJumpHeightCm.toFixed(1)}cm`
           : "-"
       }`,
-      `滞空時間：${airTime ? `${airTime.toFixed(3)}秒` : "-"}`,
-      `球速：${ballSpeed ? `${ballSpeed.toFixed(1)}km/h` : "-"}`,
+      `滞空時間：${manualMeasurement.airTime ? `${manualMeasurement.airTime.toFixed(3)}秒` : "-"}`,
+      `球速：${manualMeasurement.ballSpeed ? `${manualMeasurement.ballSpeed.toFixed(1)}km/h` : "-"}`,
     ].join("\n");
 
     if (navigator.share) {
@@ -374,12 +286,12 @@ function JumpAnalyzer() {
             onCaptureSettingsChange={setCaptureSettings}
             skillId={skillId}
             onSkillIdChange={setSkillId}
-            markers={markers}
-            markerTarget={target}
-            onMarkerTargetChange={setTarget}
-            onMarkerPlace={handleMarkerPlace}
-            onClearMarker={handleClearMarker}
-            onTimeSave={handleTimeSave}
+            markers={manualMeasurement.markers}
+            markerTarget={manualMeasurement.markerTarget}
+            onMarkerTargetChange={manualMeasurement.setMarkerTarget}
+            onMarkerPlace={manualMeasurement.placeMarker}
+            onClearMarker={manualMeasurement.clearMarker}
+            onTimeSave={manualMeasurement.saveTime}
             videoRef={videoRef}
             videoUrl={videoUrl}
             videoName={videoName}
@@ -402,14 +314,14 @@ function JumpAnalyzer() {
             isAnalyzingForm={isAnalyzingForm}
             formMessage={formMessage}
             analyzeForm={analyzeForm}
-            maxReach={maxReach}
-            jumpHeight={jumpHeight}
-            airTime={airTime}
-            airFrameCount={airFrameCount}
+            maxReach={manualMeasurement.maxReach}
+            jumpHeight={manualMeasurement.jumpHeight}
+            airTime={manualMeasurement.airTime}
+            airFrameCount={manualMeasurement.airFrameCount}
             reachEstimate={reachEstimate}
-            ballSpeed={ballSpeed}
-            speedError={speedError}
-            reachError={reachError}
+            ballSpeed={manualMeasurement.ballSpeed}
+            speedError={manualMeasurement.speedError}
+            reachError={manualMeasurement.reachError}
             isStarting={isStarting}
             onStartAnalysis={handleStartAnalysis}
             onBack={() => setPage("home")}
@@ -429,10 +341,10 @@ function JumpAnalyzer() {
             captureSettings={captureSettings}
             trackedFrameCount={trackedFrames.length}
             reachEstimate={reachEstimate}
-            maxReach={maxReach}
-            jumpHeight={jumpHeight}
-            airTime={airTime}
-            ballSpeed={ballSpeed}
+            maxReach={manualMeasurement.maxReach}
+            jumpHeight={manualMeasurement.jumpHeight}
+            airTime={manualMeasurement.airTime}
+            ballSpeed={manualMeasurement.ballSpeed}
             analysisId={analysisId}
             analyzedAt={analyzedAt}
             authUser={auth.user}
