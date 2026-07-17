@@ -20,6 +20,7 @@ import type { CaptureSettings } from "../ai/captureSettings";
 import {
   FORM_CATEGORY_LABELS,
   getEvaluatedFeatures,
+  isOverallScoreCategory,
   rankFromScore,
   scoreFromStars,
   type EvaluatedFeature,
@@ -145,8 +146,10 @@ export function buildConfidenceAwareSummary(
     };
   });
 
-  // 評価不能・未計測は総合スコアの計算対象から除外する。
-  const scoredCategories = categories.filter((c) => c.stars !== null);
+  // 評価不能・未計測に加え、表示専用の着地カテゴリも総合スコアから除外する。
+  const scoredCategories = categories.filter(
+    (c) => c.stars !== null && isOverallScoreCategory(c.key)
+  );
   const overallStars =
     scoredCategories.length > 0
       ? scoredCategories.reduce((sum, c) => sum + (c.stars ?? 0), 0) / scoredCategories.length

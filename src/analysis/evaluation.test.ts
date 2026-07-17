@@ -52,4 +52,39 @@ describe("特徴量の星評価", () => {
     expect(evaluateFeature(feature("takeoff.contactTimeSec", 0.35))?.stars).toBe(5);
     expect(evaluateFeature(feature("takeoff.contactTimeSec", 0.36))?.stars).toBe(4);
   });
+
+  it.each([
+    { key: "takeoff.kneeMinAngle", value: 100, stars: 5 },
+    { key: "takeoff.hipMinAngle", value: 95, stars: 5 },
+    { key: "takeoff.sinkDurationSec", value: 0.36, stars: 3 },
+    { key: "takeoff.maxExtensionVelocity", value: 400, stars: 4 },
+    { key: "symmetry.kneeDiff", value: 16, stars: 2 },
+    { key: "air.postureStability", value: 7.1, stars: 2 },
+    { key: "air.timeSec", value: 0.5, stars: 4 },
+    { key: "contact.wristPeakToBodyPeakTimeDiff", value: 0.16, stars: 2 },
+    { key: "arm.swingVelocity", value: 3.5, stars: 3 },
+    { key: "approach.speed", value: 3, stars: 4 },
+    { key: "landing.impactIndex", value: 7.6, stars: 2 },
+    { key: "landing.kneeAbsorption", value: 12, stars: 3 },
+    { key: "air.horizontalDrift", value: 0.61, stars: 3 },
+  ] as const)(
+    "$key=$valueを星$starsとして評価する",
+    ({ key, value, stars }) => {
+      expect(evaluateFeature(feature(key, value))?.stars).toBe(stars);
+    }
+  );
+
+  it.each([
+    { value: 6, stars: 5 },
+    { value: 0, stars: 4 },
+    { value: -4, stars: 3 },
+    { value: -8, stars: 2 },
+    { value: -8.1, stars: 1 },
+  ])("肩の傾き$value度を星$starsとして評価する", ({ value, stars }) => {
+    expect(evaluateFeature(feature("peak.shoulderTilt", value))?.stars).toBe(stars);
+  });
+
+  it("未対応の特徴量は星評価しない", () => {
+    expect(evaluateFeature(feature("unknown.feature", 1))).toBeNull();
+  });
 });
