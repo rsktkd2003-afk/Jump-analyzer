@@ -59,6 +59,7 @@ type Props = {
   isAuthReady: boolean;
   isFirebaseReady: boolean;
   isSigningIn: boolean;
+  signInError: string | null;
   onSignIn: () => Promise<void>;
   onSaveHistory: (uid: string, draft: AnalysisHistoryDraft) => Promise<void>;
 
@@ -88,6 +89,7 @@ export default function ResultPage({
   isAuthReady,
   isFirebaseReady,
   isSigningIn,
+  signInError,
   onSignIn,
   onSaveHistory,
   onBack,
@@ -393,6 +395,9 @@ export default function ResultPage({
 
       {saveStatus === "error" && saveErrorMessage && (
         <p style={{ ...mutedText, color: colors.warning, marginTop: 8 }}>{saveErrorMessage}</p>
+      )}
+      {!authUser && signInError && (
+        <p style={{ ...mutedText, color: colors.warning, marginTop: 8 }}>{signInError}</p>
       )}
       {!isFirebaseReady && (
         <p style={{ ...mutedText, marginTop: 8 }}>

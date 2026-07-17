@@ -39,6 +39,7 @@ type Props = {
   isAuthReady: boolean;
   isSigningIn: boolean;
   isFirebaseReady: boolean;
+  signInError: string | null;
   onSignIn: () => void;
   onSignOut: () => void;
 };
@@ -52,6 +53,7 @@ export default function Sidebar({
   isAuthReady,
   isSigningIn,
   isFirebaseReady,
+  signInError,
   onSignIn,
   onSignOut,
 }: Props) {
@@ -240,12 +242,19 @@ export default function Sidebar({
             </div>
           </div>
         ) : (
-          <GoogleSignInButton
-            onClick={onSignIn}
-            isLoading={isSigningIn}
-            variant="ghost"
-            style={{ ...ghostButton, width: "100%", fontSize: 12, padding: "10px 12px" }}
-          />
+          <div>
+            <GoogleSignInButton
+              onClick={onSignIn}
+              isLoading={isSigningIn}
+              variant="ghost"
+              style={{ ...ghostButton, width: "100%", fontSize: 12, padding: "10px 12px" }}
+            />
+            {signInError && (
+              <p style={{ color: colors.accent, fontSize: 11, margin: "6px 0 0", lineHeight: 1.6 }}>
+                {signInError}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </aside>

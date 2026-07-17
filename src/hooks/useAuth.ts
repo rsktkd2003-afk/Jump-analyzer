@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { isFirebaseConfigured } from "../firebase/config";
 import {
+  describeSignInError,
   signInWithGoogle,
   signOutUser,
   subscribeToAuthState,
@@ -46,8 +47,7 @@ export function useAuth(): AuthState {
       await signInWithGoogle();
     } catch (error) {
       if (!isMountedRef.current) return;
-      console.error(error);
-      setSignInError("Googleログインに失敗しました。時間をおいて再度お試しください。");
+      setSignInError(describeSignInError(error));
     } finally {
       if (isMountedRef.current) setIsSigningIn(false);
     }

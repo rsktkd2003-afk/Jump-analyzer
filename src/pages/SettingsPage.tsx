@@ -8,6 +8,7 @@ type Props = {
   isAuthReady: boolean;
   isFirebaseReady: boolean;
   isSigningIn: boolean;
+  signInError: string | null;
   onSignIn: () => Promise<void>;
   onSignOut: () => Promise<void>;
   historyCount: number;
@@ -19,6 +20,7 @@ export default function SettingsPage({
   isAuthReady,
   isFirebaseReady,
   isSigningIn,
+  signInError,
   onSignIn,
   onSignOut,
   historyCount,
@@ -58,6 +60,9 @@ export default function SettingsPage({
               Googleでログインすると、解析結果を履歴として保存し、後から比較できます。ログインしなくても動画解析自体は利用できます。
             </p>
             <GoogleSignInButton onClick={() => void onSignIn()} isLoading={isSigningIn} />
+            {signInError && (
+              <p style={{ ...mutedText, color: colors.warning, marginTop: 8 }}>{signInError}</p>
+            )}
           </div>
         )}
       </div>

@@ -321,6 +321,7 @@ function JumpAnalyzer() {
         isAuthReady={auth.isAuthReady}
         isSigningIn={auth.isSigningIn}
         isFirebaseReady={auth.isFirebaseReady}
+        signInError={auth.signInError}
         onSignIn={auth.signIn}
         onSignOut={auth.signOut}
       />
@@ -438,6 +439,7 @@ function JumpAnalyzer() {
             isAuthReady={auth.isAuthReady}
             isFirebaseReady={auth.isFirebaseReady}
             isSigningIn={auth.isSigningIn}
+            signInError={auth.signInError}
             onSignIn={auth.signIn}
             onSaveHistory={handleSaveHistory}
             onBack={() => setPage("analyze")}
@@ -455,6 +457,7 @@ function JumpAnalyzer() {
             isAuthReady={auth.isAuthReady}
             isFirebaseReady={auth.isFirebaseReady}
             isSigningIn={auth.isSigningIn}
+            signInError={auth.signInError}
             onSignIn={auth.signIn}
             historiesState={historiesState}
             onOpenCompare={() => setPage("compare")}
@@ -469,6 +472,7 @@ function JumpAnalyzer() {
             isAuthReady={auth.isAuthReady}
             isFirebaseReady={auth.isFirebaseReady}
             isSigningIn={auth.isSigningIn}
+            signInError={auth.signInError}
             onSignIn={auth.signIn}
             onSignOut={auth.signOut}
             historyCount={historiesState.status === "loaded" ? historiesState.items.length : 0}

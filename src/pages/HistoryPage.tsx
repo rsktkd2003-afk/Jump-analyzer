@@ -24,6 +24,7 @@ type Props = {
   isAuthReady: boolean;
   isFirebaseReady: boolean;
   isSigningIn: boolean;
+  signInError: string | null;
   onSignIn: () => Promise<void>;
   historiesState: HistoriesState;
   onOpenCompare: () => void;
@@ -48,6 +49,7 @@ export default function HistoryPage({
   isAuthReady,
   isFirebaseReady,
   isSigningIn,
+  signInError,
   onSignIn,
   historiesState,
   onOpenCompare,
@@ -121,6 +123,7 @@ export default function HistoryPage({
             解析履歴の保存・閲覧にはGoogleログインが必要です。
           </p>
           <GoogleSignInButton onClick={() => void onSignIn()} isLoading={isSigningIn} />
+          {signInError && <p style={{ ...mutedText, color: colors.warning, marginTop: 12 }}>{signInError}</p>}
         </div>
       </div>
     );
