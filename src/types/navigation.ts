@@ -4,6 +4,4 @@ export type PageId =
   | "result"
   | "compare"
   | "history"
-  | "players"
-  | "team"
   | "settings";

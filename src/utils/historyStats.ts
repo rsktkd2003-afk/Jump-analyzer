@@ -1,8 +1,8 @@
 // =============================================================
-// 表示専用の集計レイヤー。保存済み履歴（MeasurementHistoryItem[]）から
-// ホーム画面の統計カードに必要な値を導出するだけで、新しい解析ロジックは持たない。
+// 表示専用の集計レイヤー。Firestoreに保存済みの解析履歴（AnalysisHistory[]）
+// からホーム画面の統計カードに必要な値を導出するだけで、新しい解析ロジックは持たない。
 // =============================================================
-import type { MeasurementHistoryItem } from "../types/history";
+import type { AnalysisHistory } from "../types/analysisHistory";
 
 export type HomeStats = {
   averageJumpHeight: number | null;
@@ -17,25 +17,21 @@ function average(values: number[]): number | null {
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
-function resolveJumpHeight(item: MeasurementHistoryItem): number | null {
-  return item.estimatedReachJumpHeight ?? item.jumpHeight;
-}
-
-function resolveMaxReach(item: MeasurementHistoryItem): number | null {
-  return item.estimatedMaxReach ?? item.maxReach;
-}
-
-export function computeHomeStats(history: MeasurementHistoryItem[]): HomeStats {
-  const jumpHeights = history.map(resolveJumpHeight).filter((v): v is number => v !== null);
-  const maxReaches = history.map(resolveMaxReach).filter((v): v is number => v !== null);
+export function computeHomeStats(history: AnalysisHistory[]): HomeStats {
+  const jumpHeights = history
+    .map((item) => item.metrics.jumpHeightCm)
+    .filter((v): v is number => v !== null);
+  const maxReaches = history
+    .map((item) => item.metrics.maxReachCm)
+    .filter((v): v is number => v !== null);
   const scores = history
-    .map((item) => item.overallScore)
+    .map((item) => item.totalScore)
     .filter((v): v is number => typeof v === "number");
 
-  // 改善率：直近4件のうち最も古いものと最新のジャンプ高を比較
+  // 改善率：保存日時が新しい順の直近4件のうち最も古いものと最新のジャンプ高を比較
   const recentWithJump = history
     .slice(0, 4)
-    .map(resolveJumpHeight)
+    .map((item) => item.metrics.jumpHeightCm)
     .filter((v): v is number => v !== null);
 
   let improvementRate: number | null = null;

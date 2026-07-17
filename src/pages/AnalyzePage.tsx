@@ -279,8 +279,6 @@ export default function AnalyzePage(props: Props) {
               style={inputStyle}
             >
               <option value="spikeJump">スパイク</option>
-              <option value="receive">レシーブ（準備中）</option>
-              <option value="block">ブロック（準備中）</option>
             </select>
           </Field>
 

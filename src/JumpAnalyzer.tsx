@@ -7,12 +7,10 @@ import AnalyzePage from "./pages/AnalyzePage";
 import ResultPage from "./pages/ResultPage";
 import ComparePage from "./pages/ComparePage";
 import HistoryPage from "./pages/HistoryPage";
-import ComingSoonPage from "./pages/ComingSoonPage";
 import SettingsPage from "./pages/SettingsPage";
-import { PlayersIcon, TeamIcon, MenuIcon } from "./components/layout/Icons";
+import { MenuIcon } from "./components/layout/Icons";
 
 import type { MarkerTarget, Markers } from "./types/measurement";
-import type { MeasurementHistoryItem } from "./types/history";
 import type { PageId } from "./types/navigation";
 
 import {
@@ -24,25 +22,29 @@ import {
   calculateSpeedError,
 } from "./utils/speedCalculator";
 
-import {
-  loadMeasurementHistory,
-  saveMeasurementHistory,
-} from "./storage/measurementStorage";
 import { estimateReachFromInputs } from "./ai/reachEstimateAnalyzer";
 
 import { useVideoSource } from "./hooks/useVideoSource";
 import { useSelectedPerson } from "./hooks/useSelectedPerson";
 import { useMotionTracking } from "./hooks/useMotionTracking";
 import { usePoseAnalysis } from "./hooks/usePoseAnalysis";
+import { useAuth } from "./hooks/useAuth";
+import { useAnalysisHistories } from "./hooks/useAnalysisHistories";
 
 import { analyze } from "./analysis";
 import type { SkillId } from "./analysis/types";
-import { buildFormSummary, toFormCategoryScores } from "./utils/formSummary";
 
 import {
   DEFAULT_CAPTURE_SETTINGS,
   type CaptureSettings,
 } from "./ai/captureSettings";
+
+import {
+  deleteAllAnalysisHistories,
+  deleteAnalysisHistory,
+  saveAnalysisHistory,
+} from "./firebase/historyService";
+import type { AnalysisHistoryDraft } from "./types/analysisHistory";
 
 import { colors } from "./styles/theme";
 
@@ -55,23 +57,27 @@ const initialMarkers: Markers = {
   ballB: null,
 };
 
-const USER_NAME = "ゲスト";
-const USER_ROLE = "コーチ";
-
 const MOBILE_PAGE_TITLES: Record<PageId, string> = {
   home: "ホーム",
   analyze: "解析",
   result: "解析結果",
   compare: "比較する",
   history: "履歴",
-  players: "選手",
-  team: "チーム",
   settings: "設定",
 };
 
 function JumpAnalyzer() {
   const [page, setPage] = useState<PageId>("home");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [prevPageForSidebar, setPrevPageForSidebar] = useState<PageId>(page);
+
+  // ページ遷移時（サイドバー以外からの遷移も含む）はモバイルメニューを閉じる。
+  // レンダー中にpropに応じてstateを補正する公式パターンを使い、
+  // エフェクト内での無条件setStateを避ける。
+  if (page !== prevPageForSidebar) {
+    setPrevPageForSidebar(page);
+    setIsSidebarOpen(false);
+  }
 
   useEffect(() => {
     if (!isSidebarOpen) return;
@@ -89,10 +95,9 @@ function JumpAnalyzer() {
     };
   }, [isSidebarOpen]);
 
-  // ページ遷移時（サイドバー以外からの遷移も含む）はモバイルメニューを閉じる。
-  useEffect(() => {
-    setIsSidebarOpen(false);
-  }, [page]);
+  const auth = useAuth();
+  const uid = auth.user?.uid ?? null;
+  const historiesState = useAnalysisHistories(uid);
 
   const [fps, setFps] = useState(60);
   const [knownCm, setKnownCm] = useState(45);
@@ -114,10 +119,9 @@ function JumpAnalyzer() {
   const [frameA, setFrameA] = useState<number | null>(null);
   const [frameB, setFrameB] = useState<number | null>(null);
 
-  const [history, setHistory] = useState<MeasurementHistoryItem[]>(loadMeasurementHistory);
-
   const [isStarting, setIsStarting] = useState(false);
-  const [resultTimestamp, setResultTimestamp] = useState<string | null>(null);
+  const [analysisId, setAnalysisId] = useState<string | null>(null);
+  const [analyzedAt, setAnalyzedAt] = useState<Date | null>(null);
 
   // ---- 動画・人物選択・トラッキング・フォーム解析（元は各コンポーネント内部で
   // 個別に呼んでいたフックを、解析→結果の画面をまたいでデータを共有できるよう
@@ -154,7 +158,8 @@ function JumpAnalyzer() {
     resetSelectedPerson();
     resetTracking();
     resetPoseAnalysis();
-    setResultTimestamp(null);
+    setAnalysisId(null);
+    setAnalyzedAt(null);
   };
 
   const maxReach = useMemo(
@@ -215,11 +220,6 @@ function JumpAnalyzer() {
     return analyze(trackedFrames, skillId);
   }, [trackedFrames, skillId]);
 
-  const formSummary = useMemo(
-    () => buildFormSummary(analysisResult?.features ?? []),
-    [analysisResult]
-  );
-
   const handleMarkerPlace = (
     markerTarget: MarkerTarget,
     point: { x: number; y: number }
@@ -253,52 +253,23 @@ function JumpAnalyzer() {
     }
   };
 
-  const handleSaveResult = () => {
-    const item: MeasurementHistoryItem = {
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      mode: "jump",
-      maxReach,
-      jumpHeight,
-      airTime,
-      airFrameCount,
-      estimatedJumpHeight,
-      estimatedMaxReach: reachEstimate.estimatedMaxReachCm,
-      estimatedReachJumpHeight: reachEstimate.estimatedJumpHeightCm,
-      reachEstimateMethod: reachEstimate.method,
-      reachEstimateConfidence: reachEstimate.confidence,
-      heightCm,
-      standingReach,
-      knownMaxReach,
-      peakTime,
-      peakFrame,
-      reachError,
-      ballSpeed,
-      speedError,
-      overallScore: formSummary.overallScore,
-      overallStars: formSummary.overallStars,
-      rank: formSummary.rank,
-      formCategoryScores: analysisResult
-        ? (toFormCategoryScores(formSummary.categories) as MeasurementHistoryItem["formCategoryScores"])
-        : null,
-      improvementComments: formSummary.improvements.map((i) => i.evaluation.comment),
-      strengthComments: formSummary.strengths.map((s) => s.evaluation.comment),
-    };
-
-    const next = [item, ...history];
-    setHistory(next);
-    saveMeasurementHistory(next);
+  const handleSaveHistory = async (userId: string, draft: AnalysisHistoryDraft) => {
+    await saveAnalysisHistory(userId, draft);
   };
 
-  const handleClearHistory = () => {
-    setHistory([]);
-    saveMeasurementHistory([]);
+  const handleDeleteHistory = async (historyId: string) => {
+    if (!uid) return;
+    await deleteAnalysisHistory(uid, historyId);
+  };
+
+  const handleDeleteAllHistories = async (historyIds: string[]) => {
+    if (!uid) return;
+    await deleteAllAnalysisHistories(uid, historyIds);
   };
 
   const handleShare = async () => {
     const text = [
       "🏐 Jump Analyzer 測定結果",
-      `総合スコア：${formSummary.overallScore !== null ? `${formSummary.overallScore}点` : "-"}`,
       `最高到達点：${maxReach ? `${maxReach.toFixed(1)}cm` : "-"}`,
       `ジャンプ高：${jumpHeight ? `${jumpHeight.toFixed(1)}cm` : "-"}`,
       `推定最高到達点：${
@@ -334,7 +305,8 @@ function JumpAnalyzer() {
       setIsStarting(false);
     }
 
-    setResultTimestamp(new Date().toLocaleString());
+    setAnalysisId(crypto.randomUUID());
+    setAnalyzedAt(new Date());
     setPage("result");
   };
 
@@ -343,10 +315,14 @@ function JumpAnalyzer() {
       <Sidebar
         page={page}
         onNavigate={setPage}
-        userName={USER_NAME}
-        userRole={USER_ROLE}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
+        authUser={auth.user}
+        isAuthReady={auth.isAuthReady}
+        isSigningIn={auth.isSigningIn}
+        isFirebaseReady={auth.isFirebaseReady}
+        onSignIn={auth.signIn}
+        onSignOut={auth.signOut}
       />
 
       <div
@@ -371,8 +347,9 @@ function JumpAnalyzer() {
 
         {page === "home" && (
           <HomePage
-            userName={USER_NAME}
-            history={history}
+            userName={auth.user?.displayName ?? "ゲスト"}
+            isLoggedIn={Boolean(auth.user)}
+            historiesState={historiesState}
             onStartAnalyze={() => setPage("analyze")}
             onOpenHistory={() => setPage("history")}
           />
@@ -448,45 +425,59 @@ function JumpAnalyzer() {
             currentTrackedFrame={currentTrackedFrame}
             fps={fps}
             analysisResult={analysisResult}
+            captureSettings={captureSettings}
+            trackedFrameCount={trackedFrames.length}
             reachEstimate={reachEstimate}
             maxReach={maxReach}
             jumpHeight={jumpHeight}
             airTime={airTime}
-            resultTimestamp={resultTimestamp}
+            ballSpeed={ballSpeed}
+            analysisId={analysisId}
+            analyzedAt={analyzedAt}
+            authUser={auth.user}
+            isAuthReady={auth.isAuthReady}
+            isFirebaseReady={auth.isFirebaseReady}
+            isSigningIn={auth.isSigningIn}
+            onSignIn={auth.signIn}
+            onSaveHistory={handleSaveHistory}
             onBack={() => setPage("analyze")}
-            onSave={handleSaveResult}
             onShare={handleShare}
           />
         )}
 
-        {page === "compare" && <ComparePage history={history} />}
+        {page === "compare" && (
+          <ComparePage historiesState={historiesState} onBack={() => setPage("history")} />
+        )}
 
         {page === "history" && (
           <HistoryPage
-            history={history}
-            onClear={handleClearHistory}
+            authUser={auth.user}
+            isAuthReady={auth.isAuthReady}
+            isFirebaseReady={auth.isFirebaseReady}
+            isSigningIn={auth.isSigningIn}
+            onSignIn={auth.signIn}
+            historiesState={historiesState}
             onOpenCompare={() => setPage("compare")}
-          />
-        )}
-
-        {page === "players" && (
-          <ComingSoonPage
-            title="選手"
-            description="選手ごとの解析履歴を管理する機能は準備中です。現在は1回の解析ごとに履歴（「履歴」タブ）から確認できます。"
-            icon={<PlayersIcon size={26} />}
-          />
-        )}
-
-        {page === "team" && (
-          <ComingSoonPage
-            title="チーム"
-            description="チーム単位のダッシュボード（ランキング・練習参加率など）は準備中です。"
-            icon={<TeamIcon size={26} />}
+            onDeleteHistory={handleDeleteHistory}
+            onDeleteAllHistories={handleDeleteAllHistories}
           />
         )}
 
         {page === "settings" && (
-          <SettingsPage historyCount={history.length} onClearHistory={handleClearHistory} />
+          <SettingsPage
+            authUser={auth.user}
+            isAuthReady={auth.isAuthReady}
+            isFirebaseReady={auth.isFirebaseReady}
+            isSigningIn={auth.isSigningIn}
+            onSignIn={auth.signIn}
+            onSignOut={auth.signOut}
+            historyCount={historiesState.status === "loaded" ? historiesState.items.length : 0}
+            onClearHistory={() =>
+              handleDeleteAllHistories(
+                historiesState.status === "loaded" ? historiesState.items.map((i) => i.id) : []
+              )
+            }
+          />
         )}
       </main>
 

@@ -58,11 +58,11 @@ export type FormSummary = {
   improvements: EvaluatedFeature[];
 };
 
-function scoreFromStars(stars: number): number {
+export function scoreFromStars(stars: number): number {
   return Math.round((stars / 5) * 100);
 }
 
-function rankFromScore(score: number): FormSummary["rank"] {
+export function rankFromScore(score: number): FormSummary["rank"] {
   if (score >= 90) return "S";
   if (score >= 80) return "A";
   if (score >= 65) return "B";

@@ -44,41 +44,11 @@ export function HistoryIcon({ size = 20, style }: IconProps) {
   );
 }
 
-export function PlayersIcon({ size = 20, style }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>
-      <circle cx="9" cy="8" r="3" />
-      <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" />
-      <circle cx="17" cy="8.5" r="2.3" />
-      <path d="M15.2 14.3c2.4.3 4.3 2.1 4.3 4.7" />
-    </svg>
-  );
-}
-
-export function TeamIcon({ size = 20, style }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>
-      <rect x="3.5" y="10" width="5" height="9" rx="1" />
-      <rect x="9.75" y="6" width="5" height="13" rx="1" />
-      <rect x="16" y="12.5" width="5" height="6.5" rx="1" />
-    </svg>
-  );
-}
-
 export function SettingsIcon({ size = 20, style }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>
       <circle cx="12" cy="12" r="3" />
       <path d="M19 12a7 7 0 0 0-.1-1.2l1.8-1.4-1.5-2.6-2.1.7a7 7 0 0 0-2.1-1.2L14.6 4H9.4l-.4 2.3a7 7 0 0 0-2.1 1.2l-2.1-.7-1.5 2.6L5.1 10.8A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-1.8 1.4 1.5 2.6 2.1-.7c.6.5 1.3.9 2.1 1.2l.4 2.3h5.2l.4-2.3c.8-.3 1.5-.7 2.1-1.2l2.1.7 1.5-2.6-1.8-1.4c.1-.4.1-.8.1-1.2Z" />
-    </svg>
-  );
-}
-
-export function BellIcon({ size = 20, style }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" stroke="currentColor" style={style} {...base}>
-      <path d="M6 10a6 6 0 1 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 14 6 10Z" />
-      <path d="M10 19a2 2 0 0 0 4 0" />
     </svg>
   );
 }

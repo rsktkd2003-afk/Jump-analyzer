@@ -1,13 +1,13 @@
 import type { PageId } from "../../types/navigation";
-import { colors } from "../../styles/theme";
+import { colors, ghostButton } from "../../styles/theme";
+import type { AuthUser } from "../../firebase/authService";
+import GoogleSignInButton from "../GoogleSignInButton";
 import {
   AnalyzeIcon,
   CloseIcon,
   HistoryIcon,
   HomeIcon,
-  PlayersIcon,
   SettingsIcon,
-  TeamIcon,
 } from "./Icons";
 
 type NavItem = {
@@ -20,8 +20,6 @@ const navItems: NavItem[] = [
   { id: "home", label: "ホーム", icon: HomeIcon },
   { id: "analyze", label: "解析", icon: AnalyzeIcon },
   { id: "history", label: "履歴", icon: HistoryIcon },
-  { id: "players", label: "選手", icon: PlayersIcon },
-  { id: "team", label: "チーム", icon: TeamIcon },
   { id: "settings", label: "設定", icon: SettingsIcon },
 ];
 
@@ -34,13 +32,29 @@ const activeGroup: Partial<Record<PageId, PageId>> = {
 type Props = {
   page: PageId;
   onNavigate: (page: PageId) => void;
-  userName: string;
-  userRole: string;
   isOpen: boolean;
   onClose: () => void;
+
+  authUser: AuthUser | null;
+  isAuthReady: boolean;
+  isSigningIn: boolean;
+  isFirebaseReady: boolean;
+  onSignIn: () => void;
+  onSignOut: () => void;
 };
 
-export default function Sidebar({ page, onNavigate, userName, userRole, isOpen, onClose }: Props) {
+export default function Sidebar({
+  page,
+  onNavigate,
+  isOpen,
+  onClose,
+  authUser,
+  isAuthReady,
+  isSigningIn,
+  isFirebaseReady,
+  onSignIn,
+  onSignOut,
+}: Props) {
   const activePage = activeGroup[page] ?? page;
 
   const handleNavigate = (id: PageId) => {
@@ -155,46 +169,84 @@ export default function Sidebar({ page, onNavigate, userName, userRole, isOpen, 
 
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
           padding: "12px 10px",
           borderTop: "1px solid rgba(255,255,255,0.08)",
           marginTop: 12,
         }}
       >
-        <div
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: "50%",
-            background: "rgba(255,255,255,0.1)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            fontSize: 13,
-            fontWeight: 700,
-            flexShrink: 0,
-          }}
-        >
-          {userName.slice(0, 1)}
-        </div>
-        <div style={{ lineHeight: 1.25, minWidth: 0 }}>
-          <div
-            style={{
-              color: "#fff",
-              fontSize: 13,
-              fontWeight: 700,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {userName}
+        {!isFirebaseReady ? (
+          <p style={{ color: colors.sidebarText, fontSize: 11, margin: 0, lineHeight: 1.6 }}>
+            ログイン機能は準備中です。動画解析は引き続きご利用いただけます。
+          </p>
+        ) : !isAuthReady ? (
+          <p style={{ color: colors.sidebarText, fontSize: 11, margin: 0 }}>確認中...</p>
+        ) : authUser ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {authUser.photoURL ? (
+              <img
+                src={authUser.photoURL}
+                alt=""
+                width={34}
+                height={34}
+                style={{ borderRadius: "50%", flexShrink: 0 }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: "50%",
+                  background: "rgba(255,255,255,0.1)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  flexShrink: 0,
+                }}
+              >
+                {(authUser.displayName ?? "G").slice(0, 1)}
+              </div>
+            )}
+            <div style={{ lineHeight: 1.25, minWidth: 0, flex: 1 }}>
+              <div
+                style={{
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {authUser.displayName ?? "Googleユーザー"}
+              </div>
+              <button
+                type="button"
+                onClick={onSignOut}
+                style={{
+                  border: "none",
+                  background: "none",
+                  color: colors.sidebarText,
+                  fontSize: 11,
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline",
+                }}
+              >
+                ログアウト
+              </button>
+            </div>
           </div>
-          <div style={{ color: colors.sidebarText, fontSize: 11 }}>{userRole}</div>
-        </div>
+        ) : (
+          <GoogleSignInButton
+            onClick={onSignIn}
+            isLoading={isSigningIn}
+            variant="ghost"
+            style={{ ...ghostButton, width: "100%", fontSize: 12, padding: "10px 12px" }}
+          />
+        )}
       </div>
     </aside>
   );

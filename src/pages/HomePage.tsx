@@ -1,45 +1,34 @@
-import { AnalyzeIcon, BellIcon } from "../components/layout/Icons";
+import { AnalyzeIcon } from "../components/layout/Icons";
 import StatCard from "../components/ui/StatCard";
-import type { MeasurementHistoryItem } from "../types/history";
+import type { HistoriesState } from "../hooks/useAnalysisHistories";
 import { computeHomeStats } from "../utils/historyStats";
 import { card, colors, mutedText, page, sectionTitle } from "../styles/theme";
 
 type Props = {
   userName: string;
-  history: MeasurementHistoryItem[];
+  isLoggedIn: boolean;
+  historiesState: HistoriesState;
   onStartAnalyze: () => void;
   onOpenHistory: () => void;
 };
 
-export default function HomePage({ userName, history, onStartAnalyze, onOpenHistory }: Props) {
-  const stats = computeHomeStats(history);
-  const recent = history.slice(0, 4);
-  const latest = history[0];
+export default function HomePage({
+  userName,
+  isLoggedIn,
+  historiesState,
+  onStartAnalyze,
+  onOpenHistory,
+}: Props) {
+  const items = historiesState.status === "loaded" ? historiesState.items : [];
+  const stats = computeHomeStats(items);
+  const recent = items.slice(0, 4);
+  const latest = items[0];
 
   return (
     <div style={page} className="page-container">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div>
-          <h1 style={{ fontSize: 22 }}>こんにちは、{userName}さん！</h1>
-          <p style={{ ...mutedText, marginTop: 4 }}>今日も最高のジャンプを分析しましょう</p>
-        </div>
-        <button
-          aria-label="通知"
-          style={{
-            width: 38,
-            height: 38,
-            borderRadius: "50%",
-            border: `1px solid ${colors.border}`,
-            background: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: colors.titleText,
-            cursor: "pointer",
-          }}
-        >
-          <BellIcon size={18} />
-        </button>
+      <div>
+        <h1 style={{ fontSize: 22 }}>こんにちは、{userName}さん！</h1>
+        <p style={{ ...mutedText, marginTop: 4 }}>今日も最高のジャンプを分析しましょう</p>
       </div>
 
       <div
@@ -102,7 +91,15 @@ export default function HomePage({ userName, history, onStartAnalyze, onOpenHist
             </button>
           </div>
 
-          {recent.length === 0 ? (
+          {!isLoggedIn ? (
+            <p style={{ ...mutedText, marginTop: 12 }}>
+              Googleでログインすると、保存した解析履歴がここに表示されます。
+            </p>
+          ) : historiesState.status === "loading" ? (
+            <p style={{ ...mutedText, marginTop: 12 }}>読み込み中...</p>
+          ) : historiesState.status === "error" ? (
+            <p style={{ ...mutedText, marginTop: 12, color: colors.warning }}>{historiesState.message}</p>
+          ) : recent.length === 0 ? (
             <p style={{ ...mutedText, marginTop: 12 }}>まだ解析履歴がありません。</p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
@@ -119,20 +116,20 @@ export default function HomePage({ userName, history, onStartAnalyze, onOpenHist
                 >
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: colors.titleText }}>
-                      {new Date(item.createdAt).toLocaleDateString()}
+                      {item.savedAt.toDate().toLocaleDateString()}
                     </div>
                     <div style={{ fontSize: 11, color: colors.mutedText }}>
-                      {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      {item.savedAt.toDate().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </div>
                   </div>
                   <div
                     style={{
                       fontSize: 15,
                       fontWeight: 800,
-                      color: typeof item.overallScore === "number" ? colors.accent : colors.mutedText,
+                      color: typeof item.totalScore === "number" ? colors.accent : colors.mutedText,
                     }}
                   >
-                    {typeof item.overallScore === "number" ? `${item.overallScore}点` : "-"}
+                    {typeof item.totalScore === "number" ? `${item.totalScore}点` : "-"}
                   </div>
                 </div>
               ))}
@@ -163,14 +160,14 @@ export default function HomePage({ userName, history, onStartAnalyze, onOpenHist
 
       <div style={{ ...card, marginTop: 20 }}>
         <h2 style={sectionTitle}>AIからの最新コメント</h2>
-        {latest && (latest.improvementComments?.length || latest.strengthComments?.length) ? (
+        {latest && (latest.improvements.length > 0 || latest.strengths.length > 0) ? (
           <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-            {latest.strengthComments?.slice(0, 1).map((c, i) => (
+            {latest.strengths.slice(0, 1).map((c, i) => (
               <p key={`s-${i}`} style={{ ...mutedText, color: colors.titleText }}>
                 {c}
               </p>
             ))}
-            {latest.improvementComments?.slice(0, 1).map((c, i) => (
+            {latest.improvements.slice(0, 1).map((c, i) => (
               <p key={`i-${i}`} style={mutedText}>
                 {c}
               </p>
