@@ -464,6 +464,48 @@ describe("jumpPeakAnalyzer: 最高点フォーム解析", () => {
     );
     expect(result.form).toBeNull();
   });
+
+  it("最高点でのフォーム検出が例外を投げても動画時刻を元へ戻して再スローする", async () => {
+    const detectForVideo = useResults(
+      poseResult(heightPose(0.4, 0.6)),
+      poseResult(heightPose(0.2, 0.4))
+    );
+    detectForVideo.mockImplementationOnce(() => {
+      throw new Error("form detection failed");
+    });
+    const video = videoStub({ duration: 0.2 });
+
+    await expect(analyzeJumpFormAtPeak(video, 10)).rejects.toThrow(
+      "form detection failed"
+    );
+
+    expect(video.currentTime).toBe(0.15);
+  });
+
+  it("最高点へのフォーム解析用seekが失敗しても動画時刻を元へ戻して再スローする", async () => {
+    useResults(
+      poseResult(heightPose(0.4, 0.6)),
+      poseResult(heightPose(0.2, 0.4))
+    );
+    let seekCount = 0;
+    mocks.seekVideo.mockImplementation(
+      async (video: HTMLVideoElement, time: number) => {
+        seekCount += 1;
+        video.currentTime = time;
+
+        if (seekCount === 3) {
+          throw new Error("form seek failed");
+        }
+      }
+    );
+    const video = videoStub({ duration: 0.2 });
+
+    await expect(analyzeJumpFormAtPeak(video, 10)).rejects.toThrow(
+      "form seek failed"
+    );
+
+    expect(video.currentTime).toBe(0.15);
+  });
 });
 
 describe("jumpPeakAnalyzer: 現在フレームの骨格点", () => {
