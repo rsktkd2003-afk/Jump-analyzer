@@ -17,18 +17,18 @@ import {
   reliableAverageY,
 } from "./signalProcessing";
 
-export const LEFT_HIP = 23;
-export const RIGHT_HIP = 24;
-export const LEFT_ANKLE = 27;
-export const RIGHT_ANKLE = 28;
-export const LEFT_HEEL = 29;
-export const RIGHT_HEEL = 30;
-export const LEFT_FOOT_INDEX = 31;
-export const RIGHT_FOOT_INDEX = 32;
-export const LEFT_SHOULDER = 11;
-export const RIGHT_SHOULDER = 12;
+const LEFT_HIP = 23;
+const RIGHT_HIP = 24;
+const LEFT_ANKLE = 27;
+const RIGHT_ANKLE = 28;
+const LEFT_HEEL = 29;
+const RIGHT_HEEL = 30;
+const LEFT_FOOT_INDEX = 31;
+const RIGHT_FOOT_INDEX = 32;
+const LEFT_SHOULDER = 11;
+const RIGHT_SHOULDER = 12;
 
-export const FOOT_LANDMARKS = [
+const FOOT_LANDMARKS = [
   LEFT_ANKLE,
   RIGHT_ANKLE,
   LEFT_HEEL,
@@ -37,14 +37,14 @@ export const FOOT_LANDMARKS = [
   RIGHT_FOOT_INDEX,
 ];
 
-export const CORE_LANDMARKS = [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP];
+const CORE_LANDMARKS = [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP];
 
 /** 人間のジャンプ滞空時間としてあり得る上限（秒）。世界レベルでも約1.0秒 */
-export const MAX_PLAUSIBLE_AIR_TIME_SEC = 1.2;
+const MAX_PLAUSIBLE_AIR_TIME_SEC = 1.2;
 /** 接地とみなす、地面高さからの許容ズレ（体幹長比） */
-export const CONTACT_TOLERANCE_TORSO_RATIO = 0.15;
+const CONTACT_TOLERANCE_TORSO_RATIO = 0.15;
 /** 接地とみなす足の垂直速度上限（体幹長/秒） */
-export const CONTACT_FOOT_SPEED_TORSO_PER_SEC = 1.6;
+const CONTACT_FOOT_SPEED_TORSO_PER_SEC = 1.6;
 
 export type MotionSignals = {
   comY: number[];

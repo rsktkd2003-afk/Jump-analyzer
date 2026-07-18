@@ -136,6 +136,16 @@ describe("computeGrounded", () => {
 
     expect(grounded).toEqual([true, false]);
   });
+
+  it("足が地面付近でも速度上限を超える場合は接地とみなさない", () => {
+    const footY = [95, 95, 95, 95, 95];
+    const footVelocity = [160, -160, 160.001, -160.001, null];
+
+    // torsoPx=100 -> speedLimit=160。等号側とnullは接地、超過は非接地。
+    const grounded = computeGrounded(5, footY, footVelocity, 100, 100);
+
+    expect(grounded).toEqual([true, true, false, false, true]);
+  });
 });
 
 describe("findPeakIndex", () => {
@@ -267,6 +277,23 @@ describe("correctImplausibleAirTime", () => {
 
     expect(result.landingIndex).toBe(9);
     expect(result.airTimeSec).toBeNull();
+  });
+
+  it("補正候補が元のlandingIndex以降なら着地を引き戻さずairTimeSecをnullにする", () => {
+    const result = correctImplausibleAirTime({
+      comY: [0, 0, 0, 0, 60, 65, 65],
+      comVelocity: [0, 0, 0, 0, 10, 0, 0],
+      times: [0, 0.1, 0.2, 0.3, 0.4, 1.3, 1.4],
+      frameCount: 7,
+      peakIndex: 0,
+      takeoffIndex: 0,
+      landingIndex: 5,
+      airTimeSec: 1.3,
+      descentThresholdY: 50,
+    });
+
+    // i=4で条件成立してcorrected=5となるが、元のlandingIndexと同じため採用しない。
+    expect(result).toEqual({ landingIndex: 5, airTimeSec: null });
   });
 });
 

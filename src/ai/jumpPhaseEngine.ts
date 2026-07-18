@@ -7,8 +7,8 @@
 //
 // 各フェーズの開始 = 前フェーズの終了 + 1 とすることで、
 // フレーム重複を構造的に禁止している。
-// spikeJump（競技分析）と jumpPhaseAnalyzer（簡易4分割）の両方が
-// このエンジンを利用する。
+// spikeJump（競技分析）・MotionGraph・SkillAnalysisPanelがこのエンジンを利用する。
+// jumpPhaseAnalyzerの簡易4分割は、包含的な境界を持つ独立した互換APIとして残す。
 // =============================================================
 
 import type { TrackedFrame } from "./poseTypes";
