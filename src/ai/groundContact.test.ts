@@ -377,4 +377,16 @@ describe("detectJumpEvents", () => {
     expect(result.comY[result.landingIndex]).toBeGreaterThanOrEqual(fallbackY);
     expect(result.comY[result.landingIndex - 1]).toBeLessThan(fallbackY);
   });
+
+  it("入力framesを変更しない", () => {
+    const offsets = [
+      0, 0, 0, 0, 10, 0, -30, -60, -90, -110, -90, -60, -30, 0, 0, 0, 0, 0,
+    ];
+    const frames = offsets.map((offset, index) => createFrame(index, offset));
+    const snapshot = JSON.parse(JSON.stringify(frames));
+
+    detectJumpEvents(frames);
+
+    expect(JSON.parse(JSON.stringify(frames))).toEqual(snapshot);
+  });
 });

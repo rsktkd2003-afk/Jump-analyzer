@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { TrackedFrame } from "./poseTypes";
-import { analyzeBodyAxisMotion, summarizeMotion } from "./motionAnalyzer";
+import {
+  analyzeBodyAxisMotion,
+  buildMotionAnalysisFrames,
+  summarizeMotion,
+} from "./motionAnalyzer";
 
 function frame(time: number, centerX: number, centerY: number): TrackedFrame {
   return {
@@ -86,6 +90,47 @@ describe("summarizeMotion", () => {
     expect(result.maxCenterY).toBe(3.25);
     expect(result.centerYRange).toBeCloseTo(11.375);
   });
+
+  it("入力framesを変更しない", () => {
+    const frames = [frame(0.1, 10, 20), frame(0.5, 15, 25), frame(0.9, 12, 18)];
+    const snapshot = JSON.parse(JSON.stringify(frames));
+
+    summarizeMotion(frames);
+
+    expect(JSON.parse(JSON.stringify(frames))).toEqual(snapshot);
+  });
+});
+
+describe("buildMotionAnalysisFrames", () => {
+  it.each([0, -30, NaN, Infinity, -Infinity])(
+    "fpsが%sの場合はframesが空になる（durationは有効値）",
+    (fps) => {
+      expect(buildMotionAnalysisFrames(1.0, fps)).toEqual([]);
+    }
+  );
+
+  it.each([0, -1, NaN, Infinity, -Infinity])(
+    "durationが%sの場合はframesが空になる（fpsは有効値）",
+    (duration) => {
+      expect(buildMotionAnalysisFrames(duration, 30)).toEqual([]);
+    }
+  );
+
+  it("有効なduration・fpsからMath.ceil(duration*fps)件のフレームを生成する", () => {
+    const frames = buildMotionAnalysisFrames(1.0, 30);
+
+    expect(frames.length).toBe(30);
+    frames.forEach((f, i) => {
+      expect(f.frameIndex).toBe(i);
+      expect(f.time).toBeCloseTo(i / 30);
+    });
+  });
+
+  it("フレーム数は最大300に制限される", () => {
+    const frames = buildMotionAnalysisFrames(100, 60);
+
+    expect(frames.length).toBe(300);
+  });
 });
 
 describe("analyzeBodyAxisMotion", () => {
@@ -105,6 +150,15 @@ describe("analyzeBodyAxisMotion", () => {
     "durationが%sの場合はframesが空になる",
     async (duration) => {
       const result = await analyzeBodyAxisMotion(videoStub(duration), 30);
+
+      expect(result.frames).toEqual([]);
+    }
+  );
+
+  it.each([0, -30, NaN, Infinity, -Infinity])(
+    "fpsが%sの場合はframesが空になる",
+    async (fps) => {
+      const result = await analyzeBodyAxisMotion(videoStub(1.0), fps);
 
       expect(result.frames).toEqual([]);
     }
