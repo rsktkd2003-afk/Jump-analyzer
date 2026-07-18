@@ -306,6 +306,8 @@ describe("formatMetricValue", () => {
 // 集計ロジックだけを切り出して検証する。
 // =============================================================
 
+// 助走の各歩幅を意図的に不均一にし、approachRhythm等が浮動小数点誤差だけの
+// ほぼ0にならず、意味のある固定値を持つようにしている(PR#16でPR#14の値から拡張)。
 const CY_BY_FRAME = [
   400, 400, 400, 400, 400, 400, 400, // approach 0-6
   410, 420, 380, // takeoff 7-9
@@ -313,19 +315,19 @@ const CY_BY_FRAME = [
   200, // peak 13
   205, 215, // contact 14-15
   260, 320, 380, 400, // descent 16-19
-  400, 405, // landing 20-21
-  400, 400, // finish 22-23
+  400, 408, 403, 400, // landing 20-23(PR#16でlandingStabilizeTimeの測定に必要な4フレームへ拡張)
+  400, 400, // finish 24-25
 ];
 
 const CX_BY_FRAME = [
-  100, 120, 140, 160, 180, 200, 220, // approach
+  100, 122, 141, 165, 183, 201, 220, // approach(不均一な歩幅)
   230, 235, 235, // takeoff
   240, 245, 250, // ascent
   250, // peak
   252, 254, // contact
   256, 258, 260, 262, // descent
-  264, 264, // landing
-  264, 264, // finish
+  264, 270, 273, 274, // landing
+  274, 274, // finish
 ];
 
 const SPIKE_ARM_FRAME_INDEXES = new Set([12, 13, 14]);
@@ -342,8 +344,8 @@ const PHASE_RANGES: Array<{ name: EnginePhaseName; start: number; end: number }>
   { name: "peak", start: 13, end: 13 },
   { name: "contact", start: 14, end: 15 },
   { name: "descent", start: 16, end: 19 },
-  { name: "landing", start: 20, end: 21 },
-  { name: "finish", start: 22, end: 23 },
+  { name: "landing", start: 20, end: 23 },
+  { name: "finish", start: 24, end: 25 },
 ];
 
 type LandmarkOptions = {
@@ -656,5 +658,292 @@ describe("evaluateSpikeForm", () => {
     // lowConfidenceFrames(Set)はJumpEvents側のフィールドでevaluateSpikeFormの戻り値には含まれないため、
     // categories/overallScore/confidence/priorityMetrics等はプレーンなJSON比較で決定性を確認できる。
     expect(JSON.parse(JSON.stringify(resultA))).toEqual(JSON.parse(JSON.stringify(resultB)));
+  });
+
+  // =============================================================
+  // metricDefinitionsにある51指標すべての value/score/confidence/description を固定する。
+  // 期待値は現在の実装(evaluateSpikeForm)を一時スクリプトで実際に実行して取得した値
+  // (一時スクリプトはコミットしていない)。代表的な式は以下のとおり手計算とも
+  // 突き合わせて検証済み:
+  //   approachSpeed: |220-100|/(0.6-0)=200 → 直接一致(浮動小数点誤差のみ)
+  //   kneeExtension: avg([110,110])=110、score: clamp((110/168)*100,0,100)=65.476...
+  //   peakHeight: takeoff.centerY(410)-peak.centerY(200)=210、score: (210/120)*100>100→100
+  //   flightTime: (frames[20].time-frames[7].time)*1000=(2.0-0.7)*1000=1300ms
+  //   landingKneeFlexion: avg([165,165])=165、score: 100-(|165-130|/35)*100=0
+  //   landingSymmetry: |165-165|=0、score: 100-(0/25)*100=100
+  // 51件は metricDefinitions の宣言順(≒カテゴリのグループ順)そのまま。
+  // =============================================================
+
+  type ExpectedMetric = {
+    id: string;
+    category: EvaluationCategoryId;
+    label: string;
+    unit: EvaluationMetric["unit"];
+    weight: number;
+    value: number;
+    score: number;
+    confidence: number;
+    description: string;
+  };
+
+  const EXPECTED_METRICS_STRAIGHT_ARM: ExpectedMetric[] = [
+    { id: "approachSpeed", category: "approach", label: "助走速度", unit: "pxPerSec", weight: 0.9, value: 199.99999999999997, score: 76.92307692307692, confidence: 1, description: "助走区間の重心水平速度。" },
+    { id: "approachSpeedRetention", category: "approach", label: "最後2歩の速度維持率", unit: "ratio", weight: 1.15, value: 0.8943089430894308, score: 98.37398373983736, confidence: 1, description: "助走前半に対して後半でどれだけ速度を保てたか。" },
+    { id: "approachRhythm", category: "approach", label: "助走リズムの安定", unit: "index", weight: 0.75, value: 0.1118033988749894, score: 100, confidence: 1, description: "助走中の重心速度変動。小さいほど一定リズム。" },
+    { id: "approachDirection", category: "approach", label: "助走方向の直線性", unit: "deg", weight: 0.75, value: 0, score: 100, confidence: 1, description: "助走開始から踏切までの進行角度。横へ流れすぎていないか。" },
+    { id: "approachLateralDeviation", category: "approach", label: "助走中の左右ブレ", unit: "ratio", weight: 0.8, value: 0, score: 100, confidence: 1, description: "助走軌道からの平均ズレ。" },
+    { id: "contactTime", category: "takeoff", label: "接地時間", unit: "ms", weight: 1.2, value: 800, score: 0, confidence: 0.6, description: "最後の踏み込みで両足が接地してから、両足が地面から離れるまでの時間。" },
+    { id: "kneeValgus", category: "takeoff", label: "膝の内側倒れ", unit: "ratio", weight: 1.2, value: 0.004166377334907405, score: 100, confidence: 0.6, description: "膝が股関節・足首ラインから内側へ外れる量。" },
+    { id: "hipExtension", category: "takeoff", label: "股関節伸展", unit: "deg", weight: 1.05, value: 177.32680074447228, score: 100, confidence: 0.6, description: "離地付近の股関節角度。" },
+    { id: "kneeExtension", category: "takeoff", label: "膝伸展", unit: "deg", weight: 1.1, value: 110, score: 65.47619047619048, confidence: 0.6, description: "離地付近の膝角度。" },
+    { id: "ankleExtension", category: "takeoff", label: "足関節伸展", unit: "deg", weight: 0.95, value: 159.44395478041653, score: 100, confidence: 0.6, description: "離地付近の足首の底屈に相当する角度。" },
+    { id: "takeoffVerticalImpulseIndex", category: "takeoff", label: "重心上向き加速", unit: "pxPerSec", weight: 0.95, value: 500.0000000000001, score: 100, confidence: 0.6, description: "踏切区間での重心Y速度変化。" },
+    { id: "takeoffLateralDrift", category: "takeoff", label: "踏切中の左右ブレ", unit: "ratio", weight: 0.85, value: 0.05, score: 100, confidence: 0.6, description: "踏切中の重心水平移動量。" },
+    { id: "takeoffAngle", category: "takeoff", label: "離地角度", unit: "deg", weight: 1.0, value: 53.13010235415598, score: 57.60750840769993, confidence: 0.6, description: "離地直前後の重心速度ベクトル角度。" },
+    { id: "peakHeight", category: "flight", label: "重心最高位置", unit: "px", weight: 1.1, value: 210, score: 100, confidence: 0.35, description: "離地時から最高点までの重心上昇量。" },
+    { id: "flightTime", category: "flight", label: "滞空時間", unit: "ms", weight: 0.95, value: 1299.9999999999998, score: 100, confidence: 0.6, description: "離地から着地までの時間。" },
+    { id: "bodyLine", category: "flight", label: "身体一直線性", unit: "deg", weight: 1.0, value: 0, score: 100, confidence: 0.35, description: "頭・肩・腰・足首ラインの曲がり。小さいほど一直線。" },
+    { id: "trunkTilt", category: "flight", label: "体幹傾斜", unit: "deg", weight: 0.85, value: 0, score: 100, confidence: 0.35, description: "最高点付近の体幹の前後傾。" },
+    { id: "shoulderRotationInFlight", category: "flight", label: "空中の肩回転量", unit: "deg", weight: 0.75, value: 0, score: 0, confidence: 0.6, description: "離地から着地までの肩ライン角度変化。" },
+    { id: "flightLateralDrift", category: "flight", label: "空中の左右流れ", unit: "ratio", weight: 0.95, value: 0.34, score: 100, confidence: 0.6, description: "離地から着地までの重心水平移動。" },
+    { id: "elbowHeight", category: "takeback", label: "肘高さ", unit: "ratio", weight: 1.0, value: 0.6, score: 100, confidence: 0.35, description: "打つ側の肘が肩よりどれだけ高いか。" },
+    { id: "shoulderOpen", category: "takeback", label: "肩の開き", unit: "deg", weight: 1.05, value: 174.35274708568514, score: 0, confidence: 0.35, description: "打つ側の上腕と体幹の角度。" },
+    { id: "thoraxRotation", category: "takeback", label: "胸郭回旋", unit: "deg", weight: 1.0, value: 0, score: 0, confidence: 0.35, description: "肩ラインと骨盤ラインの角度差。" },
+    { id: "oppositeArmKeep", category: "takeback", label: "逆腕保持", unit: "deg", weight: 0.85, value: 2.124371751343267, score: 0, confidence: 0.35, description: "逆腕が早く下がりすぎていないか。" },
+    { id: "hipShoulderSequence", category: "takeback", label: "腰→肩回旋順序", unit: "ms", weight: 0.95, value: 0, score: 38.888888888888886, confidence: 0.4, description: "骨盤回旋ピークから肩回旋ピークまでの時間差。" },
+    { id: "elbowLead", category: "hit", label: "肘リード", unit: "ratio", weight: 1.05, value: 0.1, score: 94.28571428571428, confidence: 0.4, description: "インパクト付近で肘が手首より前に出る量。" },
+    { id: "proximalDistalTiming", category: "hit", label: "肩→肘→手首の加速順序", unit: "index", weight: 1.15, value: 1, score: 100, confidence: 0.4, description: "最大速度の発生順序が近位から遠位になっているか。" },
+    { id: "hitHeightGap", category: "hit", label: "打点高さ", unit: "px", weight: 1.15, value: 0, score: 100, confidence: 0.4, description: "手首最高点と重心最高点の時間的なズレを高さで評価。" },
+    { id: "frontContact", category: "hit", label: "身体前方打点", unit: "ratio", weight: 1.0, value: 0.35, score: 100, confidence: 0.4, description: "手首が頭・体幹より前にある量。" },
+    { id: "armExtension", category: "hit", label: "インパクト時の腕伸展", unit: "deg", weight: 1.1, value: 178.66778014613058, score: 100, confidence: 0.4, description: "打点付近の肘角度。" },
+    { id: "headStabilityHit", category: "hit", label: "打撃時の頭部安定", unit: "ratio", weight: 0.8, value: 0.4589117562233507, score: 67.47058977757261, confidence: 0.4, description: "打撃前後の頭部移動量。" },
+    { id: "neckAngle", category: "hit", label: "頸部角度", unit: "deg", weight: 0.65, value: 0, score: 100, confidence: 0.4, description: "顎が上がりすぎていないかを頭部・体幹角度から推定。" },
+    { id: "aerialLineAlignment", category: "airPosture", label: "全身ラインの一直線性", unit: "ratio", weight: 0.45, value: 0.057404626584804885, score: 81.29768670759756, confidence: 0.35, description: "打つ側の肩から反対側の足先までが一直線に近く、理想的な空中姿勢です。" },
+    { id: "aerialLineAngle", category: "airPosture", label: "全身ラインの角度（対水平45°）", unit: "deg", weight: 0.35, value: 83.74256570185378, score: 2.5148685962924446, confidence: 0.35, description: "全身のラインが立ちすぎており、理想とする45°より大きくなっています。" },
+    { id: "aerialExtraMotion", category: "airPosture", label: "余計な動き（揺り戻し）", unit: "index", weight: 0.2, value: 0, score: 100, confidence: 0.35, description: "最高点付近で余計な動き（揺り戻し）は見られません。傾き自体は減点していません。" },
+    { id: "followThroughRange", category: "followThrough", label: "腕振り切り", unit: "deg", weight: 0.9, value: 0, score: 0, confidence: 0.8, description: "打点後の肩〜手首角度変化。" },
+    { id: "trunkRotationContinue", category: "followThrough", label: "体幹回旋継続", unit: "deg", weight: 0.8, value: 0, score: 0, confidence: 0.8, description: "打点後も肩・骨盤回旋が続いているか。" },
+    { id: "wristPathLength", category: "followThrough", label: "腕軌道", unit: "ratio", weight: 0.75, value: 1.4016639940067086, score: 100, confidence: 0.8, description: "打点後の手首軌道長。" },
+    { id: "wristDeceleration", category: "followThrough", label: "手首減速率", unit: "ratio", weight: 0.65, value: 0.720134282439739, score: 62.19238168005802, confidence: 0.8, description: "打点後に手首速度が自然に落ちているか。" },
+    { id: "landingTimingDiff", category: "landing", label: "左右同時接地", unit: "ms", weight: 1.0, value: 0, score: 100, confidence: 0.8, description: "左右足首の接地推定タイミング差。" },
+    { id: "landingFootWidth", category: "landing", label: "着地足幅", unit: "ratio", weight: 0.85, value: 0.26, score: 0, confidence: 0.8, description: "着地時の左右足首幅。" },
+    { id: "landingKneeFlexion", category: "landing", label: "着地膝屈曲", unit: "deg", weight: 0.95, value: 165, score: 0, confidence: 0.8, description: "着地時の膝角度。柔らかく使えているか。" },
+    { id: "landingHipFlexion", category: "landing", label: "着地股関節屈曲", unit: "deg", weight: 0.8, value: 177.32680074447228, score: 0, confidence: 0.8, description: "着地時の股関節角度。" },
+    { id: "landingSymmetry", category: "landing", label: "左右沈み込み差", unit: "deg", weight: 0.9, value: 0, score: 100, confidence: 0.8, description: "左右膝角度の差。" },
+    { id: "landingForwardMove", category: "landing", label: "着地後の前後移動", unit: "ratio", weight: 0.75, value: 0.1, score: 100, confidence: 0.8, description: "着地から安定までの重心移動。" },
+    { id: "landingSideMove", category: "landing", label: "着地後の左右移動", unit: "ratio", weight: 0.75, value: 0, score: 100, confidence: 0.8, description: "着地後の横ブレ。" },
+    { id: "landingStabilizeTime", category: "landing", label: "姿勢安定までの時間", unit: "ms", weight: 0.85, value: 200.00000000000017, score: 100, confidence: 0.8, description: "着地後に重心速度が落ち着くまでの時間。" },
+    { id: "conversionEfficiency", category: "efficiency", label: "助走→ジャンプ変換効率", unit: "ratio", weight: 1.15, value: 0.6250000000000002, score: 73.52941176470591, confidence: 0.6, description: "助走速度に対する離地速度の比率。" },
+    { id: "verticalVelocityRatio", category: "efficiency", label: "垂直速度割合", unit: "ratio", weight: 1.0, value: 0.8, score: 93.75, confidence: 0.6, description: "離地速度のうち上方向成分が占める割合。" },
+    { id: "horizontalLoss", category: "efficiency", label: "水平方向速度ロス", unit: "ratio", weight: 0.95, value: 0.7272727272727273, score: 24.545454545454533, confidence: 0.6, description: "助走後半から離地直後までの水平速度低下率。" },
+    { id: "efficiencyPeakHeight", category: "efficiency", label: "最高到達の高さ", unit: "px", weight: 1.1, value: 210, score: 100, confidence: 0.35, description: "重心上昇量。" },
+    { id: "efficiencyFlightTime", category: "efficiency", label: "滞空時間", unit: "ms", weight: 0.9, value: 1299.9999999999998, score: 100, confidence: 0.6, description: "離地から着地までの時間。" },
+  ];
+
+  it("51指標のIDの並び順がmetricDefinitionsの宣言順(≒カテゴリ順)と一致する", () => {
+    const frames = buildFrames();
+    mockedRunJumpPhaseEngine.mockReturnValue(buildEngineResult(frames));
+    const result = evaluateSpikeForm(frames, "straightArm");
+
+    expect(result).not.toBeNull();
+    if (!result) return;
+
+    const actualOrder = result.categories.flatMap((c) => c.metrics.map((m) => m.id));
+    expect(actualOrder).toEqual(EXPECTED_METRICS_STRAIGHT_ARM.map((m) => m.id));
+    expect(actualOrder).toHaveLength(51);
+  });
+
+  it.each(EXPECTED_METRICS_STRAIGHT_ARM)(
+    "straightArm: $id の category/label/unit/weight/value/score/confidence/descriptionを固定する",
+    (expected) => {
+      const frames = buildFrames();
+      mockedRunJumpPhaseEngine.mockReturnValue(buildEngineResult(frames));
+      const result = evaluateSpikeForm(frames, "straightArm");
+
+      expect(result).not.toBeNull();
+      if (!result) return;
+
+      const metric = metricById(result, expected.id);
+      expect(metric, `${expected.id} should exist`).not.toBeNull();
+      if (!metric) return;
+
+      expect(metric.category).toBe(expected.category);
+      expect(metric.label).toBe(expected.label);
+      expect(metric.unit).toBe(expected.unit);
+      expect(metric.weight).toBeCloseTo(expected.weight, 6);
+      expect(metric.value).not.toBeNull();
+      expect(metric.value as number).toBeCloseTo(expected.value, 6);
+      expect(metric.score).not.toBeNull();
+      expect(metric.score as number).toBeCloseTo(expected.score, 6);
+      expect(metric.confidence).toBeCloseTo(expected.confidence, 6);
+      expect(metric.description).toBe(expected.description);
+    }
+  );
+
+  // =============================================================
+  // フォーム別のtargetByFormが実際にscoreへ反映されることを固定する。
+  // 全指標を3フォーム分重複テストせず、formTargetsへ2引数目(フォーム別override)を
+  // 持つ12指標(bodyLine, elbowHeight, shoulderOpen, thoraxRotation, oppositeArmKeep,
+  // hipShoulderSequence, elbowLead, frontContact, armExtension, followThroughRange,
+  // trunkRotationContinue, wristPathLength)だけを対象にする。
+  // このうち5指標(shoulderOpen/hipShoulderSequence/elbowLead/frontContact/wristPathLength)は
+  // 上のstraightArm基準フレーム列だけでスコアが3フォームとも異なることを確認できたが、
+  // 残り7指標は基準フレーム列の値がscoreValueの上限/下限（0または100）に張り付いてしまい
+  // フォーム差が観測できないため、それぞれの指標が非飽和域の値を取る専用フレーム列
+  // (buildFormOverrideProbeFrames)を追加した。
+  //
+  // なお proximalDistalTiming にも2引数目のoverride({circularArm:{ideal:1}})があるが、
+  // 値がbase(ideal:1)と完全に同一のため実質的に無効なoverrideであり、3フォームとも
+  // スコアが一致することを別途「現在の挙動」として固定する。
+  // =============================================================
+
+  it("フォーム別override(straightArm基準フレーム列で差が観測できる5指標)", () => {
+    const frames = buildFrames();
+    mockedRunJumpPhaseEngine.mockReturnValue(buildEngineResult(frames));
+
+    const expectedByForm: Record<SpikeArmForm, Array<{ id: string; score: number }>> = {
+      straightArm: [
+        { id: "shoulderOpen", score: 0 },
+        { id: "hipShoulderSequence", score: 38.888888888888886 },
+        { id: "elbowLead", score: 94.28571428571428 },
+        { id: "frontContact", score: 100 },
+        { id: "wristPathLength", score: 100 },
+      ],
+      bowAndArrow: [
+        { id: "shoulderOpen", score: 44.70643689804247 },
+        { id: "hipShoulderSequence", score: 22.222222222222214 },
+        { id: "elbowLead", score: 65.71428571428572 },
+        { id: "frontContact", score: 77.77777777777777 },
+        { id: "wristPathLength", score: 93.4442662671139 },
+      ],
+      circularArm: [
+        { id: "shoulderOpen", score: 1.8492940408996077 },
+        { id: "hipShoulderSequence", score: 50 },
+        { id: "elbowLead", score: 77.14285714285714 },
+        { id: "frontContact", score: 77.77777777777777 },
+        { id: "wristPathLength", score: 73.77178915824783 },
+      ],
+    };
+
+    for (const form of ["straightArm", "bowAndArrow", "circularArm"] as SpikeArmForm[]) {
+      mockedRunJumpPhaseEngine.mockReturnValue(buildEngineResult(frames));
+      const result = evaluateSpikeForm(frames, form);
+      expect(result).not.toBeNull();
+      if (!result) continue;
+
+      for (const { id, score } of expectedByForm[form]) {
+        expect(metricById(result, id)?.score, `${form}/${id}`).toBeCloseTo(score, 6);
+      }
+    }
+
+    // 値自体(measure)はフォームに依存せず不変であることも確認する
+    const straight = evaluateSpikeForm(frames, "straightArm");
+    const circular = evaluateSpikeForm(frames, "circularArm");
+    for (const id of ["shoulderOpen", "hipShoulderSequence", "elbowLead", "frontContact", "wristPathLength"]) {
+      expect(metricById(straight!, id)?.value).toBeCloseTo(metricById(circular!, id)?.value as number, 6);
+    }
+  });
+
+  /**
+   * bodyLine/elbowHeight/thoraxRotation/oppositeArmKeep/armExtension/followThroughRange/
+   * trunkRotationContinue が scoreValue の上限・下限へ飽和しない値を取るように、
+   * peakフレーム(足首オフセット・肩の傾き・肘の高さ)とdescentフレーム(肩・腰の傾き、手首位置)
+   * だけを調整した専用フレーム列。他の指標の値はstraightArm基準フレーム列と異なってよい
+   * (このテスト専用のシナリオのため)。
+   */
+  function buildFormOverrideProbeFrames(): TrackedFrame[] {
+    const frames = buildFrames();
+    const f13 = frames[13];
+    f13.landmarks[11] = { x: f13.landmarks[11].x, y: f13.landmarks[11].y - 4, visibility: 1 }; // leftShoulder
+    f13.landmarks[12] = { x: f13.landmarks[12].x, y: f13.landmarks[12].y + 4, visibility: 1 }; // rightShoulder
+    f13.landmarks[14] = { x: f13.landmarks[14].x, y: f13.landmarks[12].y - 5, visibility: 1 }; // rightElbow: 肩のすぐ上(5px)
+    f13.landmarks[27] = { x: f13.landmarks[27].x + 22, y: f13.landmarks[27].y, visibility: 1 }; // leftAnkle
+    f13.landmarks[28] = { x: f13.landmarks[28].x + 22, y: f13.landmarks[28].y, visibility: 1 }; // rightAnkle
+    // 逆腕(左)：肘を真横、手首を肩の真下にして肩頂点の角度を90°にする
+    f13.landmarks[13] = { x: f13.landmarks[11].x - 35, y: f13.landmarks[11].y, visibility: 1 }; // leftElbow
+    f13.landmarks[15] = { x: f13.landmarks[11].x, y: f13.landmarks[11].y + 84, visibility: 1 }; // leftWrist
+
+    const descentShoulderTiltsDeg = [0, 6, 12, 18];
+    const descentHipTiltsDeg = [0, 2, 3, 4];
+    for (let i = 0; i < 4; i += 1) {
+      const f = frames[16 + i];
+      const cy = f.centerY;
+      const cx = f.centerX;
+      const st = (descentShoulderTiltsDeg[i] * Math.PI) / 180;
+      const ht = (descentHipTiltsDeg[i] * Math.PI) / 180;
+      const halfShoulder = 15;
+      const halfHip = 12;
+      f.landmarks[11] = { x: cx - halfShoulder * Math.cos(st), y: cy - 100 - halfShoulder * Math.sin(st), visibility: 1 };
+      f.landmarks[12] = { x: cx + halfShoulder * Math.cos(st), y: cy - 100 + halfShoulder * Math.sin(st), visibility: 1 };
+      f.landmarks[23] = { x: cx - halfHip * Math.cos(ht), y: cy - halfHip * Math.sin(ht), visibility: 1 };
+      f.landmarks[24] = { x: cx + halfHip * Math.cos(ht), y: cy + halfHip * Math.sin(ht), visibility: 1 };
+      f.landmarks[16] = { x: cx + 22 + i * 3, y: cy - 20 - i * 15, visibility: 1 }; // rightWrist(打点後、時間とともに移動)
+    }
+    return frames;
+  }
+
+  it("フォーム別override(非飽和域の値が必要な7指標。専用フレーム列を使用)", () => {
+    const frames = buildFormOverrideProbeFrames();
+
+    const expectedByForm: Record<SpikeArmForm, Array<{ id: string; value: number; score: number }>> = {
+      straightArm: [
+        { id: "bodyLine", value: 10.388857815469606, score: 94.2130924355433 },
+        { id: "elbowHeight", value: 0.05, score: 62.5 },
+        { id: "thoraxRotation", value: 14.931417178137552, score: 39.04077563620554 },
+        { id: "oppositeArmKeep", value: 90, score: 90 },
+        { id: "armExtension", value: 120.99771964576786, score: 70.34751142195805 },
+        { id: "followThroughRange", value: 23.507002641897827, score: 31.342670189197104 },
+        { id: "trunkRotationContinue", value: 14, score: 43.75 },
+      ],
+      bowAndArrow: [
+        { id: "bodyLine", value: 10.388857815469606, score: 100 },
+        { id: "elbowHeight", value: 0.05, score: 25 },
+        { id: "thoraxRotation", value: 14.931417178137552, score: 3.32648992191983 },
+        { id: "oppositeArmKeep", value: 90, score: 60 },
+        { id: "armExtension", value: 120.99771964576786, score: 73.33195130046536 },
+        { id: "followThroughRange", value: 23.507002641897827, score: 31.342670189197104 },
+        { id: "trunkRotationContinue", value: 14, score: 43.75 },
+      ],
+      circularArm: [
+        { id: "bodyLine", value: 10.388857815469606, score: 100 },
+        { id: "elbowHeight", value: 0.05, score: 33.333333333333336 },
+        { id: "thoraxRotation", value: 14.931417178137552, score: 24.755061350491246 },
+        { id: "oppositeArmKeep", value: 90, score: 90 },
+        { id: "armExtension", value: 120.99771964576786, score: 73.33195130046536 },
+        { id: "followThroughRange", value: 23.507002641897827, score: 26.11889182433092 },
+        { id: "trunkRotationContinue", value: 14, score: 35 },
+      ],
+    };
+
+    for (const form of ["straightArm", "bowAndArrow", "circularArm"] as SpikeArmForm[]) {
+      mockedRunJumpPhaseEngine.mockReturnValue(buildEngineResult(frames));
+      const result = evaluateSpikeForm(frames, form);
+      expect(result).not.toBeNull();
+      if (!result) continue;
+
+      for (const { id, value, score } of expectedByForm[form]) {
+        const metric = metricById(result, id);
+        expect(metric?.value, `${form}/${id} value`).toBeCloseTo(value, 6);
+        expect(metric?.score, `${form}/${id} score`).toBeCloseTo(score, 6);
+      }
+    }
+  });
+
+  it("proximalDistalTimingはcircularArmのoverrideがbaseと同値のため、3フォームともスコアが一致する(現在の挙動を固定)", () => {
+    const frames = buildFrames();
+
+    const scores: number[] = [];
+    for (const form of ["straightArm", "bowAndArrow", "circularArm"] as SpikeArmForm[]) {
+      mockedRunJumpPhaseEngine.mockReturnValue(buildEngineResult(frames));
+      const result = evaluateSpikeForm(frames, form);
+      expect(result).not.toBeNull();
+      if (!result) continue;
+      scores.push(metricById(result, "proximalDistalTiming")?.score as number);
+    }
+
+    expect(scores).toHaveLength(3);
+    expect(scores[0]).toBeCloseTo(100, 6);
+    expect(scores[1]).toBeCloseTo(scores[0], 6);
+    expect(scores[2]).toBeCloseTo(scores[0], 6);
   });
 });
