@@ -1,0 +1,224 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { TrackedLandmark } from "./poseTypes";
+
+const mocks = vi.hoisted(() => ({
+  getPoseLandmarker: vi.fn(),
+  seekVideo: vi.fn(),
+}));
+
+vi.mock("./poseLandmarkerClient", () => ({
+  getPoseLandmarker: mocks.getPoseLandmarker,
+}));
+
+vi.mock("./poseVideo", () => ({
+  seekVideo: mocks.seekVideo,
+}));
+
+import { analyzeTrackedMotion } from "./poseTracking";
+
+function normalizedPose(centerX: number, centerY: number): TrackedLandmark[] {
+  return Array.from({ length: 33 }, (_, index) => ({
+    x: centerX + ((index % 3) - 1) * 0.01,
+    y: centerY + (((Math.floor(index / 3) % 3) - 1) * 0.01),
+    visibility: 1,
+  }));
+}
+
+function videoStub(): HTMLVideoElement {
+  return {
+    currentTime: 0.04,
+    duration: 0.1,
+    videoWidth: 1000,
+    videoHeight: 500,
+  } as HTMLVideoElement;
+}
+
+function useDetections(...landmarksByFrame: TrackedLandmark[][][]) {
+  const detectForVideo = vi.fn();
+
+  for (const landmarks of landmarksByFrame) {
+    detectForVideo.mockReturnValueOnce({ landmarks });
+  }
+
+  mocks.getPoseLandmarker.mockResolvedValue({ detectForVideo });
+  return detectForVideo;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.seekVideo.mockImplementation(
+    async (video: HTMLVideoElement, time: number) => {
+      video.currentTime = time;
+    }
+  );
+});
+
+describe("poseTracking: 動画全体の追跡", () => {
+  it("全フレームを検出し、進捗・検出率・元時刻を正しく返す", async () => {
+    const pose = normalizedPose(0.2, 0.4);
+    const detectForVideo = useDetections([pose], [pose]);
+    const video = videoStub();
+    const progress: number[] = [];
+
+    const result = await analyzeTrackedMotion(
+      video,
+      10,
+      (value) => progress.push(value),
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(detectForVideo).toHaveBeenCalledTimes(2);
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames.map((frame) => frame.frameIndex)).toEqual([0, 1]);
+    expect(result.detectedFrameCount).toBe(2);
+    expect(result.checkedFrameCount).toBe(2);
+    expect(result.confidence).toBe(100);
+    expect(result.message).toBe(
+      "トラッキング完了：2フレーム / 検出率 100% / 平滑化 OFF"
+    );
+    expect(progress).toEqual([0, 100]);
+    expect(video.currentTime).toBe(0.04);
+    expect(mocks.seekVideo).toHaveBeenLastCalledWith(video, 0.04);
+  });
+
+  it("選択座標に近い人物を複数人物の中から追跡する", async () => {
+    const left = normalizedPose(0.2, 0.4);
+    const right = normalizedPose(0.8, 0.4);
+    useDetections([left, right], [left, right]);
+
+    const result = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      { x: 805, y: 200 },
+      { smoothing: { enabled: false } }
+    );
+
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames[0].centerX).toBeCloseTo(800);
+    expect(result.frames[0].centerY).toBeCloseTo(200);
+  });
+
+  it("一部のフレームだけ検出できた場合も検出数と検出率を保持する", async () => {
+    useDetections([normalizedPose(0.2, 0.4)], []);
+
+    const result = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(result.frames).toHaveLength(1);
+    expect(result.detectedFrameCount).toBe(1);
+    expect(result.checkedFrameCount).toBe(2);
+    expect(result.confidence).toBe(50);
+    expect(result.message).toBe(
+      "トラッキング完了：1フレーム / 検出率 50% / 平滑化 OFF"
+    );
+  });
+
+  it("人体を一度も検出できない場合は専用メッセージを返す", async () => {
+    useDetections([], []);
+
+    const result = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(result.frames).toEqual([]);
+    expect(result.detectedFrameCount).toBe(0);
+    expect(result.checkedFrameCount).toBe(2);
+    expect(result.confidence).toBe(0);
+    expect(result.message).toBe("人体を検出できませんでした。");
+  });
+
+  it("中心移動が120pxなら除外し、120px未満なら維持する", async () => {
+    useDetections(
+      [normalizedPose(0.1, 0.4)],
+      [normalizedPose(0.22, 0.4)]
+    );
+
+    const atThreshold = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(atThreshold.frames).toHaveLength(1);
+
+    useDetections(
+      [normalizedPose(0.1, 0.4)],
+      [normalizedPose(0.219, 0.4)]
+    );
+
+    const belowThreshold = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(belowThreshold.frames).toHaveLength(2);
+  });
+
+  it("除外前の検出数と検出率は中心外れ値があっても保持する", async () => {
+    useDetections(
+      [normalizedPose(0.1, 0.4)],
+      [normalizedPose(0.3, 0.4)]
+    );
+
+    const result = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(result.detectedFrameCount).toBe(2);
+    expect(result.confidence).toBe(100);
+    expect(result.frames).toHaveLength(1);
+    expect(result.message).toBe(
+      "トラッキング完了：1フレーム / 検出率 100% / 平滑化 OFF"
+    );
+  });
+
+  it("指定がなければ平滑化ONで、急ではない座標変化を元座標側へ制限付き補正する", async () => {
+    useDetections(
+      [normalizedPose(0.2, 0.4)],
+      [normalizedPose(0.21, 0.4)]
+    );
+
+    const result = await analyzeTrackedMotion(videoStub(), 10);
+
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames[0].centerX).toBeCloseTo(200);
+    expect(result.frames[1].centerX).toBeGreaterThan(200);
+    expect(result.frames[1].centerX).toBeLessThan(210);
+    expect(result.message).toBe(
+      "トラッキング完了：2フレーム / 検出率 100% / 平滑化 ON"
+    );
+  });
+
+  it("平滑化による元座標からの補正量を最大8pxに制限する", async () => {
+    useDetections(
+      [normalizedPose(0.2, 0.4)],
+      [normalizedPose(0.3, 0.4)]
+    );
+
+    const result = await analyzeTrackedMotion(videoStub(), 10);
+
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames[1].centerX).toBeCloseTo(292);
+  });
+});
