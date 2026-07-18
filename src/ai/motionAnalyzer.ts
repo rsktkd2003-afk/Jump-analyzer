@@ -63,6 +63,25 @@ export function summarizeMotion(frames: TrackedFrame[]): MotionSummary {
   };
 }
 
+/**
+ * duration/fpsからフレーム列を生成する。
+ * durationまたはfpsが有限かつ0より大きくない場合は空配列を返す。
+ */
+export function buildMotionAnalysisFrames(
+  duration: number,
+  fps: number
+): MotionAnalysisFrame[] {
+  if (!Number.isFinite(duration) || duration <= 0) return [];
+  if (!Number.isFinite(fps) || fps <= 0) return [];
+
+  const maxFrames = Math.min(Math.ceil(duration * fps), 300);
+
+  return Array.from({ length: maxFrames }, (_, i) => ({
+    frameIndex: i,
+    time: i / fps,
+  }));
+}
+
 export async function analyzeBodyAxisMotion(
   video?: HTMLVideoElement,
   fps = 60
@@ -72,18 +91,7 @@ export async function analyzeBodyAxisMotion(
       ? video.duration
       : 0;
 
-  const frames: MotionAnalysisFrame[] = [];
-
-  if (duration > 0) {
-    const maxFrames = Math.min(Math.ceil(duration * fps), 300);
-
-    for (let i = 0; i < maxFrames; i += 1) {
-      frames.push({
-        frameIndex: i,
-        time: i / fps,
-      });
-    }
-  }
+  const frames = buildMotionAnalysisFrames(duration, fps);
 
   return {
     message:

@@ -71,29 +71,17 @@ function findWristPeakIndex(
 }
 
 /**
- * トラッキング済みフレームからフェーズ列を生成する。
- * ジャンプを検出できない場合はnull。
+ * 打球（contact）区間の決定。
+ * 手首の最高点を基準にしつつ、最高点直後〜最大0.12秒に制限し、
+ * 着地より前で必ず終わるようにクランプする。
  */
-export function runJumpPhaseEngine(
-  frames: TrackedFrame[]
-): JumpPhaseEngineResult | null {
-  const events = detectJumpEvents(frames);
-  if (!events || !events.valid) return null;
+function determineContactRange(
+  frames: TrackedFrame[],
+  times: number[],
+  events: JumpEvents
+): { contactStart: number; contactEnd: number } {
+  const { takeoffIndex, peakIndex, landingIndex } = events;
 
-  const lastIndex = frames.length - 1;
-  const times = frames.map((f) => f.time);
-
-  const {
-    sinkStartIndex,
-    takeoffIndex,
-    peakIndex,
-    landingIndex,
-    landingEndIndex,
-  } = events;
-
-  // --- 打球（contact）区間の決定 ---
-  // 手首の最高点を基準にしつつ、最高点直後〜最大0.12秒に制限し、
-  // 着地より前で必ず終わるようにクランプする。
   const contactStart = peakIndex + 1;
   const wristPeak = findWristPeakIndex(
     frames,
@@ -114,7 +102,19 @@ export function runJumpPhaseEngine(
   }
   contactEnd = Math.min(contactEnd, landingIndex - 1);
 
-  // --- フェーズ列の構築（cursor方式でフレーム重複を構造的に禁止） ---
+  return { contactStart, contactEnd };
+}
+
+/** フェーズ列の構築（cursor方式でフレーム重複を構造的に禁止） */
+function buildEnginePhases(
+  events: JumpEvents,
+  lastIndex: number,
+  times: number[],
+  contactEnd: number
+): EnginePhase[] {
+  const { sinkStartIndex, takeoffIndex, peakIndex, landingIndex, landingEndIndex } =
+    events;
+
   const phases: EnginePhase[] = [];
   let cursor = 0;
 
@@ -139,6 +139,25 @@ export function runJumpPhaseEngine(
   push("descent", landingIndex - 1);
   push("landing", landingEndIndex);
   push("finish", lastIndex);
+
+  return phases;
+}
+
+/**
+ * トラッキング済みフレームからフェーズ列を生成する。
+ * ジャンプを検出できない場合はnull。
+ */
+export function runJumpPhaseEngine(
+  frames: TrackedFrame[]
+): JumpPhaseEngineResult | null {
+  const events = detectJumpEvents(frames);
+  if (!events || !events.valid) return null;
+
+  const lastIndex = frames.length - 1;
+  const times = frames.map((f) => f.time);
+
+  const { contactEnd } = determineContactRange(frames, times, events);
+  const phases = buildEnginePhases(events, lastIndex, times, contactEnd);
 
   return { phases, events };
 }

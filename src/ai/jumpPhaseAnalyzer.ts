@@ -1,4 +1,4 @@
-import type { TrackedFrame } from "./trackingAnalyzer";
+import type { TrackedFrame } from "./poseTypes";
 
 export type JumpPhase = {
   name: "助走" | "踏切" | "空中" | "着地";
