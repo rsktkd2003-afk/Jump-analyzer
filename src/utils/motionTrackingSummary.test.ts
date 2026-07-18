@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TrackedFrame } from "../ai/trackingAnalyzer";
 import { analyzeJumpFromPoseFrames } from "./trackingQuality";
 import {
   createImprovedTrackingMessage,
+  createTrackingMessage,
   findNearestTrackedFrame,
   toPoseFrames,
 } from "./motionTrackingSummary";
@@ -13,6 +14,10 @@ vi.mock("./trackingQuality", () => ({
 }));
 
 const mockedAnalyzeJumpFromPoseFrames = vi.mocked(analyzeJumpFromPoseFrames);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function frame(overrides: Partial<TrackedFrame> = {}): TrackedFrame {
   return {
@@ -85,6 +90,19 @@ describe("motionTrackingSummary: PoseFrame変換", () => {
 });
 
 describe("motionTrackingSummary: 精度改善メッセージ", () => {
+  it("入力ガードで走査しなかった場合は理由だけを返し、ジャンプ解析を行わない", () => {
+    const message = createTrackingMessage({
+      frames: [],
+      detectedFrameCount: 0,
+      checkedFrameCount: 0,
+      confidence: 0,
+      message: "FPSは0より大きい有限値を指定してください。",
+    });
+
+    expect(message).toBe("FPSは0より大きい有限値を指定してください。");
+    expect(mockedAnalyzeJumpFromPoseFrames).not.toHaveBeenCalled();
+  });
+
   it("ジャンプ区間を検出できた場合は滞空時間とジャンプ高を付加する", () => {
     mockedAnalyzeJumpFromPoseFrames.mockReturnValue({
       success: true,

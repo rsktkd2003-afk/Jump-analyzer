@@ -3,7 +3,10 @@
 // TrackedFrame→PoseFrame変換、現在時刻に最も近いフレームの選択、
 // 精度改善解析メッセージの生成をまとめる。
 // =============================================================
-import type { TrackedFrame } from "../ai/trackingAnalyzer";
+import type {
+  MotionTrackingResult,
+  TrackedFrame,
+} from "../ai/trackingAnalyzer";
 import { analyzeJumpFromPoseFrames, type PoseFrame } from "./trackingQuality";
 
 export function toPoseFrames(trackedFrames: TrackedFrame[]): PoseFrame[] {
@@ -39,6 +42,18 @@ export function createImprovedTrackingMessage(
       ? `推定ジャンプ高 ${jumpHeightCm.toFixed(1)}cm`
       : "推定ジャンプ高を計算できませんでした。",
   ].join("\n");
+}
+
+/**
+ * 入力ガードで解析を開始しなかった場合は、その理由だけを表示する。
+ * 有効入力でフレーム走査を行った場合は従来どおり精度改善解析を付加する。
+ */
+export function createTrackingMessage(result: MotionTrackingResult): string {
+  if (result.checkedFrameCount === 0) {
+    return result.message;
+  }
+
+  return createImprovedTrackingMessage(result.message, result.frames);
 }
 
 /** 現在時刻に最も近いTrackedFrameを返す。同距離の場合は先に現れたフレームを維持する */

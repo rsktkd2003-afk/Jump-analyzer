@@ -6,7 +6,7 @@ import {
 import { summarizeMotion } from "../ai/motionAnalyzer";
 import type { SelectedPersonPoint } from "./useSelectedPerson";
 import {
-  createImprovedTrackingMessage,
+  createTrackingMessage,
   findNearestTrackedFrame,
 } from "../utils/motionTrackingSummary";
 
@@ -56,9 +56,7 @@ export function useMotionTracking(
       );
 
       setTrackedFrames(result.frames);
-      setTrackingMessage(
-        createImprovedTrackingMessage(result.message, result.frames)
-      );
+      setTrackingMessage(createTrackingMessage(result));
     } catch (error) {
       console.error(error);
       setTrackingMessage("トラッキング中にエラーが発生しました。");
