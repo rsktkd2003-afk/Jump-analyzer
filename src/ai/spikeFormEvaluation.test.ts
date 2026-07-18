@@ -335,7 +335,7 @@ const SPIKE_ARM_FRAME_INDEXES = new Set([12, 13, 14]);
 const TAKEOFF_INDEX = 7;
 const PEAK_INDEX = 13;
 const LANDING_INDEX = 20;
-const LANDING_END_INDEX = 21;
+const LANDING_END_INDEX = 23;
 
 const PHASE_RANGES: Array<{ name: EnginePhaseName; start: number; end: number }> = [
   { name: "approach", start: 0, end: 6 },
