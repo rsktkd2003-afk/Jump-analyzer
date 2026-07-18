@@ -25,12 +25,20 @@ function normalizedPose(centerX: number, centerY: number): TrackedLandmark[] {
   }));
 }
 
-function videoStub(): HTMLVideoElement {
+function videoStub(
+  overrides: Partial<
+    Pick<
+      HTMLVideoElement,
+      "currentTime" | "duration" | "videoWidth" | "videoHeight"
+    >
+  > = {}
+): HTMLVideoElement {
   return {
     currentTime: 0.04,
     duration: 0.1,
     videoWidth: 1000,
     videoHeight: 500,
+    ...overrides,
   } as HTMLVideoElement;
 }
 
@@ -139,6 +147,24 @@ describe("poseTracking: 動画全体の追跡", () => {
     expect(result.message).toBe("人体を検出できませんでした。");
   });
 
+  it("durationが0の場合は先頭フレームだけ確認し、進捗を通知しない", async () => {
+    useDetections([normalizedPose(0.2, 0.4)]);
+    const progress = vi.fn();
+
+    const result = await analyzeTrackedMotion(
+      videoStub({ duration: 0 }),
+      10,
+      progress,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(result.checkedFrameCount).toBe(1);
+    expect(result.detectedFrameCount).toBe(1);
+    expect(result.frames).toHaveLength(1);
+    expect(progress).not.toHaveBeenCalled();
+  });
+
   it("中心移動が120pxなら除外し、120px未満なら維持する", async () => {
     useDetections(
       [normalizedPose(0.1, 0.4)],
@@ -210,6 +236,21 @@ describe("poseTracking: 動画全体の追跡", () => {
     );
   });
 
+  it("visibilityが0.35の不可視点はKalman平滑化せず元座標を維持する", async () => {
+    const first = normalizedPose(0.2, 0.4);
+    const second = normalizedPose(0.21, 0.4);
+    first[0] = { ...first[0], x: 0.05, visibility: 0.35 };
+    second[0] = { ...second[0], x: 0.95, visibility: 0.35 };
+    useDetections([first], [second]);
+
+    const result = await analyzeTrackedMotion(videoStub(), 10);
+
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames[1].landmarks[0].x).toBe(950);
+    expect(result.frames[1].landmarks[1].x).toBeGreaterThan(200);
+    expect(result.frames[1].landmarks[1].x).toBeLessThan(210);
+  });
+
   it("平滑化による元座標からの補正量を最大8pxに制限する", async () => {
     useDetections(
       [normalizedPose(0.2, 0.4)],
@@ -221,4 +262,29 @@ describe("poseTracking: 動画全体の追跡", () => {
     expect(result.frames).toHaveLength(2);
     expect(result.frames[1].centerX).toBeCloseTo(292);
   });
+
+  it.each([
+    ["直前", 7.999, 7.999],
+    ["一致", 8, 8],
+    ["直後", 8.001, 8],
+  ])(
+    "平滑化オフセット上限8pxの%sでは補正量を%spxにする",
+    async (_, unboundedOffset, expectedOffset) => {
+      // 2フレーム目のKalman+blendによる未クランプ補正量は移動量の31.5%。
+      const movementPx = unboundedOffset / 0.315;
+      const secondCenterPx = 200 + movementPx;
+      useDetections(
+        [normalizedPose(0.2, 0.4)],
+        [normalizedPose(secondCenterPx / 1000, 0.4)]
+      );
+
+      const result = await analyzeTrackedMotion(videoStub(), 10);
+
+      expect(result.frames).toHaveLength(2);
+      expect(result.frames[1].centerX).toBeCloseTo(
+        secondCenterPx - expectedOffset,
+        6
+      );
+    }
+  );
 });

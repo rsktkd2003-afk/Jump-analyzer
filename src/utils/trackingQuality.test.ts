@@ -96,6 +96,18 @@ describe("trackingQuality: 骨格座標の平滑化", () => {
     expect(result[0].ankleY).toBeNull();
   });
 
+  it("visibilityが境界値0.5と等しい点は有効として扱う", () => {
+    const result = smoothPoseFrames([
+      {
+        timestamp: 0,
+        leftHip: { x: 0, y: 5, visibility: 0.5 },
+        rightHip: { x: 0, y: 100, visibility: 0.49 },
+      },
+    ]);
+
+    expect(result[0].hipY).toBe(5);
+  });
+
   it("時刻差が0以下なら速度を計測不能にする", () => {
     const result = smoothPoseFrames([
       { timestamp: 1000, leftHip: { x: 0, y: 1 } },
