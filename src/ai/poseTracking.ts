@@ -1,18 +1,15 @@
 // =============================================================
 // 動画全体の人物トラッキング。
 // フレームループ → 人物選択 → TrackedFrame生成 → 平滑化 の流れ。
+// 外れ値除去・Kalman平滑化そのものは poseTrackingSmoothing.ts に分離している。
 // =============================================================
 
 import type { PoseLandmarker } from "@mediapipe/tasks-vision";
-import { KalmanFilter1D } from "../utils/kalmanFilter";
 import { getPoseLandmarker } from "./poseLandmarkerClient";
-import {
-  createTrackedFrame,
-  recreateTrackedFrameFromLandmarks,
-} from "./poseFrameFactory";
-import { isVisibleLandmark } from "./poseLandmarks";
+import { createTrackedFrame } from "./poseFrameFactory";
 import { selectPoseByPoint } from "./poseSelection";
 import { seekVideo } from "./poseVideo";
+import { removeCenterOutliers, smoothFramesWithKalman } from "./poseTrackingSmoothing";
 import type {
   MotionTrackingOptions,
   MotionTrackingResult,
@@ -21,20 +18,11 @@ import type {
   TrackedLandmark,
 } from "./poseTypes";
 
-const MAX_CENTER_JUMP_PX = 120;
 const PROGRESS_MAX_PERCENT = 100;
 const DEFAULT_SMOOTHING_ENABLED = true;
 
-const KALMAN_INITIAL_ERROR_ESTIMATE = 1;
-const KALMAN_ERROR_MEASURE = 9;
-const KALMAN_PROCESS_NOISE = 0.08;
-const KALMAN_BLEND_RATIO = 0.35;
-const MAX_SMOOTHING_OFFSET_PX = 8;
-
-type LandmarkFilters = {
-  x: KalmanFilter1D;
-  y: KalmanFilter1D;
-};
+const INVALID_FPS_MESSAGE = "FPSは0より大きい有限値を指定してください。";
+const INVALID_DURATION_MESSAGE = "動画時間を取得できませんでした。";
 
 function toPixelPoses(
   normalizedPoses: TrackedLandmark[][],
@@ -49,114 +37,6 @@ function toPixelPoses(
       visibility: point.visibility,
     }))
   );
-}
-
-function removeCenterOutliers(frames: TrackedFrame[]): TrackedFrame[] {
-  const filteredFrames: TrackedFrame[] = [];
-
-  for (const current of frames) {
-    if (filteredFrames.length === 0) {
-      filteredFrames.push(current);
-      continue;
-    }
-
-    const previous = filteredFrames[filteredFrames.length - 1];
-
-    const centerJump = Math.hypot(
-      current.centerX - previous.centerX,
-      current.centerY - previous.centerY
-    );
-
-    if (centerJump < MAX_CENTER_JUMP_PX) {
-      filteredFrames.push(current);
-    }
-  }
-
-  return filteredFrames;
-}
-
-function createLandmarkFilter(initialPoint: TrackedLandmark): LandmarkFilters {
-  return {
-    x: new KalmanFilter1D(
-      initialPoint.x,
-      KALMAN_INITIAL_ERROR_ESTIMATE,
-      KALMAN_ERROR_MEASURE,
-      KALMAN_PROCESS_NOISE
-    ),
-    y: new KalmanFilter1D(
-      initialPoint.y,
-      KALMAN_INITIAL_ERROR_ESTIMATE,
-      KALMAN_ERROR_MEASURE,
-      KALMAN_PROCESS_NOISE
-    ),
-  };
-}
-
-function blendWithOriginal(original: number, filtered: number): number {
-  const blended =
-    original * (1 - KALMAN_BLEND_RATIO) + filtered * KALMAN_BLEND_RATIO;
-  const offset = blended - original;
-
-  if (Math.abs(offset) <= MAX_SMOOTHING_OFFSET_PX) {
-    return blended;
-  }
-
-  return original + Math.sign(offset) * MAX_SMOOTHING_OFFSET_PX;
-}
-
-function smoothVisibleLandmark(
-  landmark: TrackedLandmark,
-  filters: LandmarkFilters
-): TrackedLandmark {
-  const filteredX = filters.x.update(landmark.x);
-  const filteredY = filters.y.update(landmark.y);
-
-  return {
-    ...landmark,
-    x: blendWithOriginal(landmark.x, filteredX),
-    y: blendWithOriginal(landmark.y, filteredY),
-  };
-}
-
-function smoothLandmarks(
-  landmarks: TrackedLandmark[],
-  filtersByLandmarkIndex: Map<number, LandmarkFilters>
-): TrackedLandmark[] {
-  return landmarks.map((landmark, landmarkIndex) => {
-    if (!isVisibleLandmark(landmark)) {
-      return landmark;
-    }
-
-    const existingFilters = filtersByLandmarkIndex.get(landmarkIndex);
-
-    if (existingFilters) {
-      return smoothVisibleLandmark(landmark, existingFilters);
-    }
-
-    const filters = createLandmarkFilter(landmark);
-    filtersByLandmarkIndex.set(landmarkIndex, filters);
-
-    return landmark;
-  });
-}
-
-function smoothFramesWithKalman(
-  frames: TrackedFrame[],
-  videoWidth: number,
-  videoHeight: number
-): TrackedFrame[] {
-  const filtersByLandmarkIndex = new Map<number, LandmarkFilters>();
-
-  return frames.map((frame) => {
-    const landmarks = smoothLandmarks(frame.landmarks, filtersByLandmarkIndex);
-
-    return recreateTrackedFrameFromLandmarks(
-      frame,
-      landmarks,
-      videoWidth,
-      videoHeight
-    );
-  });
 }
 
 function shouldApplySmoothing(options?: MotionTrackingOptions): boolean {
@@ -222,6 +102,26 @@ function buildResultMessage(
   return `トラッキング完了：${frames.length}フレーム / 検出率 ${confidence}% / 平滑化 ${smoothingText}`;
 }
 
+/** fpsが0以下・NaN・±Infinityの場合はループが終了しないため、開始前に弾く */
+function isValidFps(fps: number): boolean {
+  return Number.isFinite(fps) && fps > 0;
+}
+
+/** durationがNaN・±Infinity・負数の場合は計測を開始できない。0は既存仕様どおり許可する */
+function isValidDuration(duration: number): boolean {
+  return Number.isFinite(duration) && duration >= 0;
+}
+
+function buildInvalidResult(message: string): MotionTrackingResult {
+  return {
+    frames: [],
+    detectedFrameCount: 0,
+    checkedFrameCount: 0,
+    confidence: 0,
+    message,
+  };
+}
+
 export async function analyzeTrackedMotion(
   video: HTMLVideoElement,
   fps: number,
@@ -229,6 +129,14 @@ export async function analyzeTrackedMotion(
   selectedPoint?: Point2D | null,
   options?: MotionTrackingOptions
 ): Promise<MotionTrackingResult> {
+  if (!isValidFps(fps)) {
+    return buildInvalidResult(INVALID_FPS_MESSAGE);
+  }
+
+  if (!isValidDuration(video.duration)) {
+    return buildInvalidResult(INVALID_DURATION_MESSAGE);
+  }
+
   const landmarker = await getPoseLandmarker();
 
   const originalTime = video.currentTime;
