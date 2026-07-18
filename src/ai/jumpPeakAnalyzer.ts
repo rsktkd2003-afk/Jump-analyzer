@@ -1,13 +1,19 @@
 // =============================================================
 // ジャンプ最高到達点の解析と、最高点フレームのフォーム解析。
+// 体の高さスコア・最高点比較・フォーム計算は jumpPeakAnalysis.ts に分離している。
 // 今後の追加予定：最高到達点補正 / 身長補正 / AIフォーム採点。
 // =============================================================
 
-import type { PoseLandmarkerResult } from "@mediapipe/tasks-vision";
+import type { PoseLandmarker } from "@mediapipe/tasks-vision";
 import { getPoseLandmarker } from "./poseLandmarkerClient";
-import { getBodyJoints } from "./poseLandmarks";
-import { calculateAngle } from "./poseMath";
 import { hasValidDuration, seekVideo } from "./poseVideo";
+import {
+  PEAK_SCAN_FRAME_STRIDE,
+  analyzeFormFromPose,
+  getBodyHeightScore,
+  selectBetterPeak,
+  type PeakSelection,
+} from "./jumpPeakAnalysis";
 import type {
   FormAnalysisResult,
   JumpFormAnalysisResult,
@@ -15,138 +21,27 @@ import type {
   PoseOverlayPoint,
 } from "./poseTypes";
 
-// 体の高さスコア＝手首と腰の高さの重み付き平均（yが小さいほど高い）
-const WRIST_HEIGHT_WEIGHT = 0.75;
-const HIP_HEIGHT_WEIGHT = 0.25;
+// poseAnalyzer.ts / formAnalyzer.ts の既存importを維持するための再export
+export { analyzeJumpForm } from "./jumpPeakAnalysis";
 
-// 最高点探索では2フレームおきにスキャンする
-const PEAK_SCAN_FRAME_STRIDE = 2;
+const INVALID_FPS_MESSAGE = "FPSは0より大きい有限値を指定してください。";
+const INVALID_DURATION_MESSAGE = "動画の長さを取得できませんでした。";
 
-// ---------------------------------------------------------
-// スコア計算
-// ---------------------------------------------------------
-
-/** 体の高さスコア。小さいほど高い位置にいる。骨格点が欠けていればnull */
-function getBodyHeightScore(result: PoseLandmarkerResult): number | null {
-  const landmarks = result.landmarks[0];
-
-  if (!landmarks) {
-    return null;
-  }
-
-  const joints = getBodyJoints(landmarks);
-  const { leftWrist, rightWrist, leftHip, rightHip } = joints;
-
-  if (!leftWrist || !rightWrist || !leftHip || !rightHip) {
-    return null;
-  }
-
-  const wristY = Math.min(leftWrist.y, rightWrist.y);
-  const hipY = (leftHip.y + rightHip.y) / 2;
-
-  return wristY * WRIST_HEIGHT_WEIGHT + hipY * HIP_HEIGHT_WEIGHT;
+/** fpsが0以下・NaN・±Infinityの場合はループが終了しないため、開始前に弾く */
+function isValidFps(fps: number): boolean {
+  return Number.isFinite(fps) && fps > 0;
 }
 
-// ---------------------------------------------------------
-// フォーム解析
-// ---------------------------------------------------------
-
-/** 骨格の相対位置と膝角度からフォーム評価テキストを生成する */
-export function analyzeJumpForm(params: {
-  shoulderY: number;
-  elbowY: number;
-  hipY: number;
-  kneeAngle: number;
-}): FormAnalysisResult {
-  const { shoulderY, elbowY, hipY, kneeAngle } = params;
-
-  const elbowDiff = elbowY - shoulderY;
-  const hipDiff = hipY - shoulderY;
-
-  const elbowText =
-    elbowDiff > 0
-      ? `肘の位置は肩より下にあります。差分：約 ${elbowDiff.toFixed(3)}`
-      : elbowDiff < 0
-      ? `肘の位置は肩より上にあります。差分：約 ${Math.abs(elbowDiff).toFixed(3)}`
-      : "肘の位置は肩とほぼ同じ高さです。";
-
-  const postureText =
-    hipDiff > 0
-      ? `腰の位置は肩より下にあります。差分：約 ${hipDiff.toFixed(3)}`
-      : hipDiff < 0
-      ? `腰の位置は肩より上にあります。差分：約 ${Math.abs(hipDiff).toFixed(3)}`
-      : "腰の位置は肩とほぼ同じ高さです。";
-
-  const kneeText = `膝角度：約 ${kneeAngle.toFixed(1)}°`;
-
-  const summary = [
-    "最高点候補フレームにおける骨格情報です。",
-    `肘-肩の高さ差：${elbowDiff.toFixed(3)}`,
-    `腰-肩の高さ差：${hipDiff.toFixed(3)}`,
-    `膝角度：${kneeAngle.toFixed(1)}°`,
-  ].join("\n");
-
-  return {
-    elbowText,
-    postureText,
-    kneeText,
-    summary,
-  };
-}
-
-/** 検出結果からフォーム解析を行う。必要な骨格点が欠けていればnull */
-function analyzeFormFromPose(
-  result: PoseLandmarkerResult
-): FormAnalysisResult | null {
-  const landmarks = result.landmarks[0];
-
-  if (!landmarks) {
-    return null;
+function validatePeakInputs(video: HTMLVideoElement, fps: number): string | null {
+  if (!isValidFps(fps)) {
+    return INVALID_FPS_MESSAGE;
   }
 
-  const joints = getBodyJoints(landmarks);
-  const {
-    leftShoulder,
-    rightShoulder,
-    leftElbow,
-    rightElbow,
-    leftHip,
-    rightHip,
-    leftKnee,
-    rightKnee,
-    leftAnkle,
-    rightAnkle,
-  } = joints;
-
-  if (
-    !leftShoulder ||
-    !rightShoulder ||
-    !leftElbow ||
-    !rightElbow ||
-    !leftHip ||
-    !rightHip ||
-    !leftKnee ||
-    !rightKnee ||
-    !leftAnkle ||
-    !rightAnkle
-  ) {
-    return null;
+  if (!hasValidDuration(video)) {
+    return INVALID_DURATION_MESSAGE;
   }
 
-  const shoulderY = Math.min(leftShoulder.y, rightShoulder.y);
-  const elbowY = Math.min(leftElbow.y, rightElbow.y);
-  const hipY = (leftHip.y + rightHip.y) / 2;
-
-  const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
-  const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
-  const kneeAngle = Math.max(leftKneeAngle, rightKneeAngle);
-
-  return analyzeJumpForm({
-    shoulderY,
-    elbowY,
-    hipY,
-    kneeAngle,
-  });
+  return null;
 }
 
 // ---------------------------------------------------------
@@ -165,65 +60,72 @@ function createPeakFailure(
   };
 }
 
-export async function analyzeJumpPeakFrame(
+async function scanForPeak(
+  landmarker: PoseLandmarker,
   video: HTMLVideoElement,
   fps: number
 ): Promise<PoseAnalysisResult> {
-  const landmarker = await getPoseLandmarker();
-
-  if (!hasValidDuration(video)) {
-    return createPeakFailure("動画の長さを取得できませんでした。", 0);
-  }
-
   const originalTime = video.currentTime;
   const duration = video.duration;
 
-  let bestTime: number | null = null;
-  let bestFrame: number | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
+  let bestPeak: PeakSelection = null;
   let detectedCount = 0;
   let checkedCount = 0;
 
   const step = PEAK_SCAN_FRAME_STRIDE / fps;
 
-  for (let time = 0; time <= duration; time += step) {
-    await seekVideo(video, time);
+  try {
+    for (let time = 0; time <= duration; time += step) {
+      await seekVideo(video, time);
 
-    const result = landmarker.detectForVideo(video, performance.now());
-    const score = getBodyHeightScore(result);
+      const result = landmarker.detectForVideo(video, performance.now());
+      const score = getBodyHeightScore(result);
 
-    checkedCount += 1;
+      checkedCount += 1;
 
-    if (score === null) {
-      continue;
+      if (score === null) {
+        continue;
+      }
+
+      detectedCount += 1;
+      bestPeak = selectBetterPeak(bestPeak, { time, score });
     }
-
-    detectedCount += 1;
-
-    if (score < bestScore) {
-      bestScore = score;
-      bestTime = time;
-      bestFrame = Math.round(time * fps);
-    }
+  } finally {
+    video.currentTime = originalTime;
   }
-
-  video.currentTime = originalTime;
 
   const confidence =
     checkedCount === 0 ? 0 : Math.round((detectedCount / checkedCount) * 100);
 
-  if (bestTime === null || bestFrame === null) {
+  if (!bestPeak) {
     return createPeakFailure("人体を検出できませんでした。", confidence);
   }
 
+  const bestFrame = Math.round(bestPeak.time * fps);
+
   return {
     bestFrame,
-    bestTime,
+    bestTime: bestPeak.time,
     confidence,
-    message: `最高点候補：${bestFrame}F / ${bestTime.toFixed(
+    message: `最高点候補：${bestFrame}F / ${bestPeak.time.toFixed(
       3
     )}秒 / 検出率 ${confidence}%`,
   };
+}
+
+export async function analyzeJumpPeakFrame(
+  video: HTMLVideoElement,
+  fps: number
+): Promise<PoseAnalysisResult> {
+  const invalidMessage = validatePeakInputs(video, fps);
+
+  if (invalidMessage) {
+    return createPeakFailure(invalidMessage, 0);
+  }
+
+  const landmarker = await getPoseLandmarker();
+
+  return scanForPeak(landmarker, video, fps);
 }
 
 // ---------------------------------------------------------
@@ -248,34 +150,49 @@ export async function analyzeJumpFormAtPeak(
   video: HTMLVideoElement,
   fps: number
 ): Promise<JumpFormAnalysisResult> {
-  const landmarker = await getPoseLandmarker();
-  const originalTime = video.currentTime;
-  const peak = await analyzeJumpPeakFrame(video, fps);
+  const invalidMessage = validatePeakInputs(video, fps);
 
-  if (peak.bestTime === null || peak.bestFrame === null) {
-    return createFormResult(peak, peak.message, null);
-  }
-
-  await seekVideo(video, peak.bestTime);
-
-  const poseResult = landmarker.detectForVideo(video, performance.now());
-  const form = analyzeFormFromPose(poseResult);
-
-  video.currentTime = originalTime;
-
-  if (!form) {
+  if (invalidMessage) {
     return createFormResult(
-      peak,
-      "最高点候補は見つかりましたが、フォーム解析に必要な骨格点を検出できませんでした。",
+      createPeakFailure(invalidMessage, 0),
+      invalidMessage,
       null
     );
   }
 
-  return createFormResult(
-    peak,
-    `フォーム解析完了：${peak.bestFrame}F / ${peak.bestTime.toFixed(3)}秒`,
-    form
-  );
+  // 最高点探索とフォーム検出で同一landmarkerを共有し、モデルの重複取得を避ける
+  const landmarker = await getPoseLandmarker();
+  const originalTime = video.currentTime;
+
+  const peak = await scanForPeak(landmarker, video, fps);
+
+  if (peak.bestTime === null || peak.bestFrame === null) {
+    // scanForPeak内のfinallyで既に元の時刻へ復元済み
+    return createFormResult(peak, peak.message, null);
+  }
+
+  try {
+    await seekVideo(video, peak.bestTime);
+
+    const poseResult = landmarker.detectForVideo(video, performance.now());
+    const form = analyzeFormFromPose(poseResult);
+
+    if (!form) {
+      return createFormResult(
+        peak,
+        "最高点候補は見つかりましたが、フォーム解析に必要な骨格点を検出できませんでした。",
+        null
+      );
+    }
+
+    return createFormResult(
+      peak,
+      `フォーム解析完了：${peak.bestFrame}F / ${peak.bestTime.toFixed(3)}秒`,
+      form
+    );
+  } finally {
+    video.currentTime = originalTime;
+  }
 }
 
 // ---------------------------------------------------------

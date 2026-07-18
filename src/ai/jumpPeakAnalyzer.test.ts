@@ -107,6 +107,93 @@ beforeEach(() => {
   );
 });
 
+describe("jumpPeakAnalyzer: 入力ガード", () => {
+  it.each([0, -10, NaN, Infinity, -Infinity])(
+    "analyzeJumpPeakFrame: fpsが%sの場合はモデル取得・seek・detectを行わない",
+    async (fps) => {
+      const detectForVideo = vi.fn();
+      mocks.getPoseLandmarker.mockResolvedValue({ detectForVideo });
+      const video = videoStub();
+
+      const result = await analyzeJumpPeakFrame(video, fps);
+
+      expect(mocks.getPoseLandmarker).not.toHaveBeenCalled();
+      expect(mocks.seekVideo).not.toHaveBeenCalled();
+      expect(detectForVideo).not.toHaveBeenCalled();
+      expect(video.currentTime).toBe(0.15);
+      expect(result).toEqual({
+        bestFrame: null,
+        bestTime: null,
+        confidence: 0,
+        message: "FPSは0より大きい有限値を指定してください。",
+      });
+    }
+  );
+
+  it.each([0, -10, NaN, Infinity, -Infinity])(
+    "analyzeJumpFormAtPeak: fpsが%sの場合も同じガード結果を返す",
+    async (fps) => {
+      const detectForVideo = vi.fn();
+      mocks.getPoseLandmarker.mockResolvedValue({ detectForVideo });
+      const video = videoStub();
+
+      const result = await analyzeJumpFormAtPeak(video, fps);
+
+      expect(mocks.getPoseLandmarker).not.toHaveBeenCalled();
+      expect(mocks.seekVideo).not.toHaveBeenCalled();
+      expect(detectForVideo).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        frame: null,
+        time: null,
+        confidence: 0,
+        message: "FPSは0より大きい有限値を指定してください。",
+        form: null,
+      });
+    }
+  );
+
+  it("analyzeJumpFormAtPeak: duration不正時もモデルを取得しない", async () => {
+    const detectForVideo = vi.fn();
+    mocks.getPoseLandmarker.mockResolvedValue({ detectForVideo });
+
+    const result = await analyzeJumpFormAtPeak(videoStub({ duration: 0 }), 10);
+
+    expect(mocks.getPoseLandmarker).not.toHaveBeenCalled();
+    expect(mocks.seekVideo).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      frame: null,
+      time: null,
+      confidence: 0,
+      message: "動画の長さを取得できませんでした。",
+      form: null,
+    });
+  });
+
+  it("analyzeJumpFormAtPeak: 正常系ではモデルを1回だけ取得する（探索とフォーム検出で共有）", async () => {
+    useResults(
+      poseResult(heightPose(0.4, 0.6)),
+      poseResult(heightPose(0.2, 0.4)),
+      poseResult(formPose())
+    );
+
+    await analyzeJumpFormAtPeak(videoStub({ duration: 0.2 }), 10);
+
+    expect(mocks.getPoseLandmarker).toHaveBeenCalledTimes(1);
+  });
+
+  it("detectForVideoが例外を投げても動画時刻を元へ戻してから再スローする", async () => {
+    const detectForVideo = vi.fn(() => {
+      throw new Error("boom");
+    });
+    mocks.getPoseLandmarker.mockResolvedValue({ detectForVideo });
+    const video = videoStub({ duration: 0.2 });
+
+    await expect(analyzeJumpPeakFrame(video, 10)).rejects.toThrow("boom");
+
+    expect(video.currentTime).toBe(0.15);
+  });
+});
+
 describe("jumpPeakAnalyzer: フォーム評価テキスト", () => {
   it("肘と腰が肩より下の場合は正の差分を表示する", () => {
     const result = analyzeJumpForm({
@@ -298,6 +385,7 @@ describe("jumpPeakAnalyzer: 最高点候補の探索", () => {
         message: "動画の長さを取得できませんでした。",
       });
       expect(mocks.seekVideo).not.toHaveBeenCalled();
+      expect(mocks.getPoseLandmarker).not.toHaveBeenCalled();
     }
   );
 
@@ -375,6 +463,48 @@ describe("jumpPeakAnalyzer: 最高点フォーム解析", () => {
       "最高点候補は見つかりましたが、フォーム解析に必要な骨格点を検出できませんでした。"
     );
     expect(result.form).toBeNull();
+  });
+
+  it("最高点でのフォーム検出が例外を投げても動画時刻を元へ戻して再スローする", async () => {
+    const detectForVideo = useResults(
+      poseResult(heightPose(0.4, 0.6)),
+      poseResult(heightPose(0.2, 0.4))
+    );
+    detectForVideo.mockImplementationOnce(() => {
+      throw new Error("form detection failed");
+    });
+    const video = videoStub({ duration: 0.2 });
+
+    await expect(analyzeJumpFormAtPeak(video, 10)).rejects.toThrow(
+      "form detection failed"
+    );
+
+    expect(video.currentTime).toBe(0.15);
+  });
+
+  it("最高点へのフォーム解析用seekが失敗しても動画時刻を元へ戻して再スローする", async () => {
+    useResults(
+      poseResult(heightPose(0.4, 0.6)),
+      poseResult(heightPose(0.2, 0.4))
+    );
+    let seekCount = 0;
+    mocks.seekVideo.mockImplementation(
+      async (video: HTMLVideoElement, time: number) => {
+        seekCount += 1;
+        video.currentTime = time;
+
+        if (seekCount === 3) {
+          throw new Error("form seek failed");
+        }
+      }
+    );
+    const video = videoStub({ duration: 0.2 });
+
+    await expect(analyzeJumpFormAtPeak(video, 10)).rejects.toThrow(
+      "form seek failed"
+    );
+
+    expect(video.currentTime).toBe(0.15);
   });
 });
 
