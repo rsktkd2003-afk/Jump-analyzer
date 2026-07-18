@@ -341,4 +341,40 @@ describe("detectJumpEvents", () => {
     );
     expect(result?.sinkStartIndex ?? -1).toBeGreaterThanOrEqual(0);
   });
+
+  it("接地条件を満たす着地点がない場合は基準姿勢の75%回復点へフォールバックする", () => {
+    const offsets = [
+      0, 0, 0, 0, 10, 0, -30, -60, -90, -110, -90, -60, -30, 0, 0, 0,
+      0, 0,
+    ];
+    const frames = offsets.map((offset, index) => createFrame(index, offset));
+
+    // 離地後は足だけを上げたままにし、重心が基準姿勢へ戻っても
+    // grounded=falseとなる系列を作る。これにより一次着地探索は失敗する。
+    for (let index = 6; index < frames.length; index += 1) {
+      for (const footIndex of [27, 28, 29, 30, 31, 32]) {
+        frames[index].landmarks[footIndex] = {
+          ...frames[index].landmarks[footIndex],
+          y: 300,
+        };
+      }
+    }
+
+    const result = detectJumpEvents(frames);
+
+    expect(result).not.toBeNull();
+    expect(result?.valid).toBe(true);
+    if (!result) return;
+
+    const fallbackY = result.baselineComY - result.risePx * 0.25;
+
+    expect(result.grounded[result.landingIndex]).toBe(false);
+    expect(
+      result.grounded
+        .slice(result.peakIndex + 1, result.landingIndex + 1)
+        .every((grounded) => !grounded)
+    ).toBe(true);
+    expect(result.comY[result.landingIndex]).toBeGreaterThanOrEqual(fallbackY);
+    expect(result.comY[result.landingIndex - 1]).toBeLessThan(fallbackY);
+  });
 });
