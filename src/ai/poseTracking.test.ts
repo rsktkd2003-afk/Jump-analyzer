@@ -62,6 +62,73 @@ beforeEach(() => {
   );
 });
 
+describe("poseTracking: 入力ガード", () => {
+  it.each([0, -10, NaN, Infinity, -Infinity])(
+    "fpsが%sの場合はモデル取得・seek・進捗通知を行わず、時刻を維持したまま計測不能を返す",
+    async (fps) => {
+      const video = videoStub();
+      const originalTime = video.currentTime;
+      const progress = vi.fn();
+
+      const result = await analyzeTrackedMotion(video, fps, progress, null, {
+        smoothing: { enabled: false },
+      });
+
+      expect(mocks.getPoseLandmarker).not.toHaveBeenCalled();
+      expect(mocks.seekVideo).not.toHaveBeenCalled();
+      expect(progress).not.toHaveBeenCalled();
+      expect(video.currentTime).toBe(originalTime);
+      expect(result).toEqual({
+        frames: [],
+        detectedFrameCount: 0,
+        checkedFrameCount: 0,
+        confidence: 0,
+        message: "FPSは0より大きい有限値を指定してください。",
+      });
+    }
+  );
+
+  it.each([-1, NaN, Infinity, -Infinity])(
+    "video.durationが%sの場合はモデル取得・seek・進捗通知を行わず、時刻を維持したまま計測不能を返す",
+    async (duration) => {
+      const video = videoStub({ duration });
+      const originalTime = video.currentTime;
+      const progress = vi.fn();
+
+      const result = await analyzeTrackedMotion(video, 10, progress, null, {
+        smoothing: { enabled: false },
+      });
+
+      expect(mocks.getPoseLandmarker).not.toHaveBeenCalled();
+      expect(mocks.seekVideo).not.toHaveBeenCalled();
+      expect(progress).not.toHaveBeenCalled();
+      expect(video.currentTime).toBe(originalTime);
+      expect(result).toEqual({
+        frames: [],
+        detectedFrameCount: 0,
+        checkedFrameCount: 0,
+        confidence: 0,
+        message: "動画時間を取得できませんでした。",
+      });
+    }
+  );
+
+  it("duration=0は既存どおり有効な値として扱う", async () => {
+    useDetections([normalizedPose(0.2, 0.4)]);
+
+    const result = await analyzeTrackedMotion(
+      videoStub({ duration: 0 }),
+      10,
+      undefined,
+      null,
+      { smoothing: { enabled: false } }
+    );
+
+    expect(mocks.getPoseLandmarker).toHaveBeenCalledTimes(1);
+    expect(result.checkedFrameCount).toBe(1);
+  });
+});
+
 describe("poseTracking: 動画全体の追跡", () => {
   it("全フレームを検出し、進捗・検出率・元時刻を正しく返す", async () => {
     const pose = normalizedPose(0.2, 0.4);
