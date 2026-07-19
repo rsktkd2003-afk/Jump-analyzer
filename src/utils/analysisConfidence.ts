@@ -29,6 +29,8 @@ import {
   type FormSummary,
 } from "./formSummary";
 import type { Feature } from "../analysis/types";
+import type { ConfidenceQualitySignals } from "../ai/trackingQualitySignals";
+import { ENABLE_CONFIDENCE_V2 } from "../ai/featureFlags";
 
 export type MeasurementStatus =
   | "measured"
@@ -76,12 +78,110 @@ export type ConfidenceAwareFormSummary = {
   confidenceLevel: ConfidenceLevel;
   confidenceOverall: number | null;
   confidenceWarnings: string[];
+  /** 信頼度算出方式のバージョン。2 = 品質シグナルによる追加減点あり（Phase1）、1 = 従来方式 */
+  confidenceVersion: 1 | 2;
 };
 
 function classifyByConfidence(confidence: number): MeasurementStatus {
   if (confidence >= MEASURED_MIN_CONFIDENCE) return "measured";
   if (confidence >= REFERENCE_MIN_CONFIDENCE) return "reference";
   return "unavailable";
+}
+
+// =============================================================
+// 信頼度算出v2（Phase1）: 既存のvisibilityベース信頼度・着地除外の
+// 集計方法（isOverallScoreCategory）は変更せず、トラッキング品質の
+// 追加シグナルによる「小さな減点」だけを上乗せする。既存スコアの
+// 全面置き換えではないため、最大減点幅は MAX_QUALITY_PENALTY_RATIO に
+// 固定してある（既存の解析結果を大きく崩さないため）。
+// ENABLE_CONFIDENCE_V2 が false、または qualitySignals が渡されない
+// 場合は、この節は一切作動せず従来（v1）の挙動と完全に一致する。
+// =============================================================
+
+/** 品質シグナルによる減点の合計上限（相対比）。既存スコアを大きく崩さないための上限 */
+const MAX_QUALITY_PENALTY_RATIO = 0.25;
+
+type QualityPenaltyRule = {
+  /** signals から評価対象の値を取り出す */
+  read: (signals: ConfidenceQualitySignals) => number | null;
+  /** true の場合「値が閾値を下回ったら」トリガー、falseなら「上回ったら」トリガー */
+  triggerWhenBelow: boolean;
+  /** この値を超えた/下回ったら警告・減点の対象とする */
+  threshold: number;
+  /** 加算する減点比率 */
+  penalty: number;
+  /** ユーザー向けの日本語メッセージ（技術用語は使わない） */
+  message: string;
+};
+
+const QUALITY_PENALTY_RULES: QualityPenaltyRule[] = [
+  {
+    read: (s) => s.averageTrackerMatchScore,
+    triggerWhenBelow: true, // マッチスコアは高いほど良いため、閾値未満で発火
+    threshold: 0.55,
+    penalty: 0.08,
+    message: "人物追跡が一部不安定でした",
+  },
+  {
+    read: (s) => s.coastingFrameRatio,
+    triggerWhenBelow: false,
+    threshold: 0.15,
+    penalty: 0.05,
+    message: "人物追跡が一部不安定でした",
+  },
+  {
+    read: (s) => s.interpolatedRatio,
+    triggerWhenBelow: false,
+    threshold: 0.2,
+    penalty: 0.07,
+    message: "ランドマークの補間が多くなっています",
+  },
+  {
+    read: (s) => s.lowConfidenceFrameRatio,
+    triggerWhenBelow: false,
+    threshold: 0.2,
+    penalty: 0.07,
+    message: "一部の関節の認識精度が低くなっています",
+  },
+  {
+    read: (s) => s.lateralityCorrectionRatio,
+    triggerWhenBelow: false,
+    threshold: 0.05,
+    penalty: 0.06,
+    message: "左右の関節位置の補正が複数回発生しました",
+  },
+  {
+    read: (s) => s.abnormalJumpRatio,
+    triggerWhenBelow: false,
+    threshold: 0.08,
+    penalty: 0.05,
+    message: "人物追跡が一部不安定でした",
+  },
+];
+
+function computeQualityPenalty(signals: ConfidenceQualitySignals): {
+  penaltyRatio: number;
+  reasons: string[];
+} {
+  let penaltyRatio = 0;
+  const reasons = new Set<string>();
+
+  for (const rule of QUALITY_PENALTY_RULES) {
+    const value = rule.read(signals);
+    if (value === null || !Number.isFinite(value)) continue;
+
+    const triggered = rule.triggerWhenBelow ? value < rule.threshold : value > rule.threshold;
+
+    if (triggered) {
+      penaltyRatio += rule.penalty;
+      reasons.add(rule.message);
+    }
+  }
+
+  return {
+    penaltyRatio: Math.min(penaltyRatio, MAX_QUALITY_PENALTY_RATIO),
+    reasons: Array.from(reasons),
+  };
 }
 
 /**
@@ -93,10 +193,17 @@ function classifyByConfidence(confidence: number): MeasurementStatus {
 export function buildConfidenceAwareSummary(
   features: Feature[],
   captureSettings: CaptureSettings,
-  trackedFrameCount?: number
+  trackedFrameCount?: number,
+  qualitySignals?: ConfidenceQualitySignals
 ): ConfidenceAwareFormSummary {
   const evaluated = getEvaluatedFeatures(features);
   const settingsFactor = captureSettingsFactor(captureSettings);
+
+  const qualityPenalty =
+    ENABLE_CONFIDENCE_V2 && qualitySignals
+      ? computeQualityPenalty(qualitySignals)
+      : { penaltyRatio: 0, reasons: [] as string[] };
+  const confidenceVersion: 1 | 2 = ENABLE_CONFIDENCE_V2 && qualitySignals ? 2 : 1;
 
   const categories: CategoryStatusSummary[] = (
     Object.keys(FORM_CATEGORY_LABELS) as FormCategoryKey[]
@@ -117,7 +224,10 @@ export function buildConfidenceAwareSummary(
 
     const rawConfidence =
       items.reduce((sum, item) => sum + item.feature.confidence, 0) / items.length;
-    const confidence = Math.max(0, Math.min(1, rawConfidence * settingsFactor));
+    const confidence = Math.max(
+      0,
+      Math.min(1, rawConfidence * settingsFactor * (1 - qualityPenalty.penaltyRatio))
+    );
     const status = classifyByConfidence(confidence);
 
     if (status === "unavailable") {
@@ -190,11 +300,14 @@ export function buildConfidenceAwareSummary(
       ? "medium"
       : "low";
 
-  const confidenceWarnings = buildConfidenceWarnings({
-    captureSettings,
-    categories,
-    trackedFrameCount,
-  });
+  const confidenceWarnings = [
+    ...buildConfidenceWarnings({
+      captureSettings,
+      categories,
+      trackedFrameCount,
+    }),
+    ...qualityPenalty.reasons,
+  ];
 
   return {
     categories,
@@ -206,6 +319,7 @@ export function buildConfidenceAwareSummary(
     confidenceLevel,
     confidenceOverall,
     confidenceWarnings,
+    confidenceVersion,
   };
 }
 

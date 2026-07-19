@@ -1,4 +1,5 @@
 import type { TrackedFrame } from "../ai/poseAnalyzer";
+import type { ConfidenceQualitySignals } from "../ai/trackingQualitySignals";
 
 export type Phase =
   | "approach"
@@ -56,4 +57,6 @@ export type AnalysisResult = {
   skillId: SkillId;
   segments: PhaseSegment[];
   features: Feature[];
+  /** 信頼度算出v2（Phase1）向けの品質シグナル。Feature Flag OFF時はundefined */
+  qualitySignals?: ConfidenceQualitySignals;
 };

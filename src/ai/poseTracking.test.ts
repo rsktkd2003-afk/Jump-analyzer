@@ -25,6 +25,45 @@ function normalizedPose(centerX: number, centerY: number): TrackedLandmark[] {
   }));
 }
 
+/** 左右の肩・肘・手首・股関節・膝・足首を明確に区別できる姿勢（正規化座標）。
+ *  Phase1の左右補正・トラッカー統合テスト向け。 */
+function distinctPose(centerX: number, centerY: number): TrackedLandmark[] {
+  const landmarks = normalizedPose(centerX, centerY);
+  const set = (index: number, dx: number, dy: number) => {
+    landmarks[index] = { x: centerX + dx, y: centerY + dy, visibility: 1 };
+  };
+  set(11, -0.03, -0.05); // left shoulder
+  set(12, 0.03, -0.05); // right shoulder
+  set(13, -0.04, -0.02); // left elbow
+  set(14, 0.04, -0.02); // right elbow
+  set(15, -0.045, 0.02); // left wrist
+  set(16, 0.045, 0.02); // right wrist
+  set(23, -0.02, 0.05); // left hip
+  set(24, 0.02, 0.05); // right hip
+  set(25, -0.02, 0.12); // left knee
+  set(26, 0.02, 0.12); // right knee
+  set(27, -0.024, 0.18); // left ankle
+  set(28, 0.024, 0.18); // right ankle
+  return landmarks;
+}
+
+function swapLeftRight(landmarks: TrackedLandmark[]): TrackedLandmark[] {
+  const result = [...landmarks];
+  const pairs: Array<[number, number]> = [
+    [11, 12],
+    [13, 14],
+    [15, 16],
+    [23, 24],
+    [25, 26],
+    [27, 28],
+  ];
+  for (const [l, r] of pairs) {
+    result[l] = landmarks[r];
+    result[r] = landmarks[l];
+  }
+  return result;
+}
+
 function videoStub(
   overrides: Partial<
     Pick<
@@ -354,4 +393,74 @@ describe("poseTracking: 動画全体の追跡", () => {
       );
     }
   );
+});
+
+describe("poseTracking: Phase1統合（左右補正・トラッカー・平滑化の連携）", () => {
+  it("左右補正はKalman平滑化より前に適用され、平滑化後も左右が正しい状態を維持する", async () => {
+    const physical0 = distinctPose(0.5, 0.4);
+    const physical1 = distinctPose(0.51, 0.41);
+    // MediaPipeがこのフレームだけ左右を取り違えたことを模す
+    const mislabeled1 = swapLeftRight(physical1);
+
+    useDetections([physical0], [mislabeled1]);
+
+    const result = await analyzeTrackedMotion(videoStub(), 10);
+
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames[1].lateralityCorrection?.corrected).toBe(true);
+    // 平滑化を経た後も、左肩は右肩より画面左側にあること（=補正が平滑化に飲み込まれていない）
+    expect(result.frames[1].landmarks[11].x).toBeLessThan(result.frames[1].landmarks[12].x);
+  });
+
+  it("左右補正後もランドマーク配列は33点のまま、関節角度が再計算される", async () => {
+    const physical0 = distinctPose(0.5, 0.4);
+    const mislabeled1 = swapLeftRight(distinctPose(0.51, 0.41));
+
+    useDetections([physical0], [mislabeled1]);
+
+    const result = await analyzeTrackedMotion(videoStub(), 10, undefined, null, {
+      smoothing: { enabled: false },
+    });
+
+    expect(result.frames).toHaveLength(2);
+    expect(result.frames[1].landmarks).toHaveLength(33);
+    expect(result.frames[1].leftKneeAngle).not.toBeNull();
+    expect(result.frames[1].rightKneeAngle).not.toBeNull();
+    expect(Number.isFinite(result.frames[1].leftKneeAngle)).toBe(true);
+  });
+
+  it("補正不要な通常フレームでは左右補正が発生しない（誤補正なし）", async () => {
+    const physical0 = distinctPose(0.5, 0.4);
+    const physical1 = distinctPose(0.51, 0.41);
+
+    useDetections([physical0], [physical1]);
+
+    const result = await analyzeTrackedMotion(videoStub(), 10, undefined, null, {
+      smoothing: { enabled: false },
+    });
+
+    expect(result.frames[1].lateralityCorrection?.corrected).toBe(false);
+  });
+
+  it("複数人物からトラッカーで対象を選び、その後の左右補正・平滑化も同じ対象に対して行われる", async () => {
+    const leftPersonF0 = distinctPose(0.2, 0.4);
+    const rightPersonF0 = distinctPose(0.8, 0.4);
+    const leftPersonF1 = distinctPose(0.21, 0.41);
+    const rightPersonF1 = swapLeftRight(distinctPose(0.81, 0.41)); // 選択対象側だけ左右取り違え
+
+    useDetections([leftPersonF0, rightPersonF0], [leftPersonF1, rightPersonF1]);
+
+    const result = await analyzeTrackedMotion(
+      videoStub(),
+      10,
+      undefined,
+      { x: 805, y: 200 },
+      { smoothing: { enabled: false } }
+    );
+
+    expect(result.frames).toHaveLength(2);
+    // クリック位置(805,200)に近い右側の人物が一貫して選ばれ、そのフレームで左右補正が働く
+    expect(result.frames[1].centerX).toBeGreaterThan(700);
+    expect(result.frames[1].lateralityCorrection?.corrected).toBe(true);
+  });
 });

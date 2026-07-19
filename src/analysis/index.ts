@@ -1,6 +1,8 @@
 import type { AnalysisResult, SkillDefinition, SkillId } from "./types";
 import type { TrackedFrame } from "../ai/poseAnalyzer";
 import { spikeJumpDefinition } from "./skills/spikeJump";
+import { deriveQualitySignalsFromFrames } from "../ai/trackingQualitySignals";
+import { ENABLE_CONFIDENCE_V2 } from "../ai/featureFlags";
 
 const stubDefinition = (id: SkillId): SkillDefinition => ({
   id,
@@ -26,6 +28,7 @@ export function analyze(
     skillId,
     segments,
     features,
+    qualitySignals: ENABLE_CONFIDENCE_V2 ? deriveQualitySignalsFromFrames(frames) : undefined,
   };
 }
 

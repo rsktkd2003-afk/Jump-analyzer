@@ -48,6 +48,32 @@ export type TrackedFrame = {
 
   leftShoulderAngle: number | null;
   rightShoulderAngle: number | null;
+
+  /** 左右入れ替わり補正の結果（Phase1追加）。未適用/フラグOFF時はundefined */
+  lateralityCorrection?: LateralityCorrectionResult;
+
+  /** 軽量トラッカーによるこのフレームの人物マッチング品質（Phase1追加）。未適用時はundefined */
+  trackingQuality?: TrackerFrameQuality;
+};
+
+/** 左右入れ替わり検出・補正の結果（フレーム単位）。 */
+export type LateralityCorrectionResult = {
+  /** このフレームで左右を入れ替えたか */
+  corrected: boolean;
+  /** 判定の確信度（0〜1）。低いほど交換有無の判断が曖昧だったことを示す */
+  confidence: number;
+  /** デバッグ用の理由（本番の通常表示では使わない） */
+  reason?: string;
+};
+
+/** 軽量トラッカーによる、このフレームの人物マッチング品質。 */
+export type TrackerFrameQuality = {
+  /** 予測・IoU・サイズ・ポーズ類似度等を統合したマッチングスコア（0〜1、高いほど良い） */
+  matchScore: number;
+  /** このフレームで一時的に対象を見失い、予測のみで維持したか */
+  isCoasting: boolean;
+  /** 対象を再取得した直後のフレームか */
+  reacquired: boolean;
 };
 
 export type LandmarkSmoothingOptions = {

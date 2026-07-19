@@ -104,7 +104,13 @@ export default function ResultPage({
   const [pendingDraftFields, setPendingDraftFields] = useState<{ title: string; memo: string } | null>(null);
 
   const confidenceSummary = useMemo(
-    () => buildConfidenceAwareSummary(analysisResult?.features ?? [], captureSettings, trackedFrameCount),
+    () =>
+      buildConfidenceAwareSummary(
+        analysisResult?.features ?? [],
+        captureSettings,
+        trackedFrameCount,
+        analysisResult?.qualitySignals
+      ),
     [analysisResult, captureSettings, trackedFrameCount]
   );
 
