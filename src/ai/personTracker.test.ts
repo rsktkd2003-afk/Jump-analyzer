@@ -112,14 +112,18 @@ describe("personTracker: 基本追跡", () => {
     }).not.toThrow();
   });
 
-  it("候補が1人しかいない場合は、予測から離れていてもコストに関わらず採用する（外れ値除去は後段に委ねる）", () => {
+  it("追跡状態確立後は候補が1人でも、体格が明確に異なれば無条件採用しない（coastingになる）", () => {
     const tracker = createPersonTracker({ x: 100, y: 100 });
     tracker.update([makePerson(100, 100)], 0);
+    const established = tracker.update([makePerson(103, 101)], 1 / 30);
+    expect(established.pose).not.toBeNull();
 
-    // 単一候補が予測位置から大きく離れていても、比較対象がないため採用される。
-    const farPerson = makePerson(500, 500);
-    const { pose } = tracker.update([farPerson], 1 / 30);
-    expect(pose).not.toBeNull();
+    // 体格（スケール0.4）が明確に異なる別人が、離れた位置に1人だけ残る。
+    const differentPerson = makePerson(500, 500, 0.4);
+    const { pose, quality } = tracker.update([differentPerson], 2 / 30);
+
+    expect(pose).toBeNull();
+    expect(quality).toBeUndefined();
   });
 
   it("Feature Flag OFF相当（トラッカー未使用）では既存のselectPoseByPointがそのまま使われる", () => {
@@ -199,5 +203,99 @@ describe("personTracker: 状態管理", () => {
     // 元のtrackerも引き続き正常に動作する（フラグ切替による干渉がない）。
     const { pose } = tracker.update([makePerson(210, 202)], 2 / 30);
     expect(pose).not.toBeNull();
+  });
+});
+
+describe("personTracker: 再取得", () => {
+  it("MAX_COASTING_FRAMESを超えて消失した場合のみ、クリック位置基準で再取得しreacquiredCountが増える", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    tracker.update([makePerson(100, 100)], 0);
+    tracker.update([makePerson(103, 101)], 1 / 30);
+
+    let time = 2 / 30;
+    // MAX_COASTING_FRAMES(10)を超える15フレーム、誰も検出されない
+    for (let i = 0; i < 15; i += 1) {
+      const { pose } = tracker.update([], time);
+      expect(pose).toBeNull();
+      time += 1 / 30;
+    }
+
+    // クリック位置{x:100,y:100}付近に新たな候補が現れる
+    const { pose, quality } = tracker.update([makePerson(100, 100)], time);
+
+    expect(pose).not.toBeNull();
+    expect(quality?.reacquired).toBe(true);
+    expect(tracker.getStats().reacquiredCount).toBeGreaterThan(0);
+  });
+
+  it("MAX_COASTING_FRAMES以内であれば、まだクリック位置基準の再取得を行わない（reacquiredCountは増えない）", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    tracker.update([makePerson(100, 100)], 0);
+    tracker.update([makePerson(103, 101)], 1 / 30);
+
+    let time = 2 / 30;
+    for (let i = 0; i < 5; i += 1) {
+      tracker.update([], time);
+      time += 1 / 30;
+    }
+
+    expect(tracker.getStats().reacquiredCount).toBe(0);
+  });
+});
+
+describe("personTracker: coasting統計（PersonTrackerStats）", () => {
+  it("coasting発生時にcoastingFrameCountが増加し、coastingFrameRatioが0より大きく1以下になる", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    tracker.update([makePerson(100, 100)], 0);
+    tracker.update([makePerson(103, 101)], 1 / 30);
+    tracker.update([], 2 / 30); // 候補なし＝coasting
+
+    const stats = tracker.getStats();
+    expect(stats.coastingFrameCount).toBeGreaterThan(0);
+
+    const ratio = stats.coastingFrameCount / stats.updateCount;
+    expect(ratio).toBeGreaterThan(0);
+    expect(ratio).toBeLessThanOrEqual(1);
+  });
+
+  it("一度もcoastingしなければcoastingFrameCountは0のまま", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    for (let i = 0; i < 5; i += 1) {
+      tracker.update([makePerson(100 + i * 3, 100 + i * 2)], i / 30);
+    }
+    const stats = tracker.getStats();
+    expect(stats.coastingFrameCount).toBe(0);
+    expect(stats.matchedFrameCount).toBe(5);
+  });
+
+  it("一度もupdateを呼ばなくてもNaNにならない（updateCount=0）", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    const stats = tracker.getStats();
+    expect(stats.updateCount).toBe(0);
+    expect(stats.coastingFrameCount).toBe(0);
+    expect(stats.matchScoreCount).toBe(0);
+    expect(Number.isNaN(stats.matchScoreSum)).toBe(false);
+  });
+
+  it("getStats()はスナップショットであり、外部から変更しても内部状態に影響しない", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    tracker.update([makePerson(100, 100)], 0);
+
+    const snapshot = tracker.getStats();
+    snapshot.matchedFrameCount = 9999;
+
+    expect(tracker.getStats().matchedFrameCount).toBe(1);
+  });
+
+  it("マッチしたフレームの平均マッチスコアがaverageTrackerMatchScoreとして算出できる", () => {
+    const tracker = createPersonTracker({ x: 100, y: 100 });
+    tracker.update([makePerson(100, 100)], 0);
+    tracker.update([makePerson(103, 101)], 1 / 30);
+
+    const stats = tracker.getStats();
+    expect(stats.matchScoreCount).toBeGreaterThan(0);
+    const average = stats.matchScoreSum / stats.matchScoreCount;
+    expect(average).toBeGreaterThan(0);
+    expect(average).toBeLessThanOrEqual(1);
   });
 });

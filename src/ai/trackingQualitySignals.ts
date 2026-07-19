@@ -7,7 +7,7 @@
 // =============================================================
 
 import { detectJumpEvents } from "./groundContact";
-import type { TrackedFrame } from "./poseTypes";
+import type { PersonTrackerStats, TrackedFrame } from "./poseTypes";
 
 export type ConfidenceQualitySignals = {
   /** 欠測（visibility不足）を線形補間したフレームの割合（groundContact.ts 由来） */
@@ -60,8 +60,19 @@ function computeAbnormalJumpRatio(frames: TrackedFrame[]): number | null {
  * groundContact.ts の detectJumpEvents を独自に呼び出すため、
  * analysis/skills/spikeJump.ts 側の計算とは独立している
  * （既存の分析ロジックには一切手を入れない）。
+ *
+ * trackerStats（PersonTracker.getStats()の戻り値）を渡した場合、
+ * トラッカーのマッチ品質・coasting比率はそちらを優先して使う。
+ * coasting（予測のみで維持したフレーム）はpose:nullを返すためTrackedFrame
+ * 自体が生成されず、生成済みのframesだけからは正しく逆算できないため。
+ * trackerStatsを渡さない場合は、フレームに付与されたtrackingQualityから
+ * 求められる範囲でのみ算出する（この場合coastingFrameRatioは常に0に近い
+ * 近似値になる点に注意。トラッカーを使った解析ではtrackerStatsを渡すこと）。
  */
-export function deriveQualitySignalsFromFrames(frames: TrackedFrame[]): ConfidenceQualitySignals {
+export function deriveQualitySignalsFromFrames(
+  frames: TrackedFrame[],
+  trackerStats?: PersonTrackerStats
+): ConfidenceQualitySignals {
   const events = detectJumpEvents(frames);
 
   const interpolatedRatio = events ? events.interpolatedRatio : null;
@@ -70,13 +81,19 @@ export function deriveQualitySignalsFromFrames(frames: TrackedFrame[]): Confiden
     : null;
 
   const trackedFramesWithQuality = frames.filter((f) => f.trackingQuality);
-  const averageTrackerMatchScore =
-    trackedFramesWithQuality.length > 0
+
+  const averageTrackerMatchScore = trackerStats
+    ? trackerStats.matchScoreCount > 0
+      ? trackerStats.matchScoreSum / trackerStats.matchScoreCount
+      : null
+    : trackedFramesWithQuality.length > 0
       ? trackedFramesWithQuality.reduce((sum, f) => sum + (f.trackingQuality?.matchScore ?? 0), 0) /
         trackedFramesWithQuality.length
       : null;
-  const coastingFrameRatio =
-    trackedFramesWithQuality.length > 0
+
+  const coastingFrameRatio = trackerStats
+    ? ratioOrNull(trackerStats.coastingFrameCount, trackerStats.updateCount)
+    : trackedFramesWithQuality.length > 0
       ? ratioOrNull(
           trackedFramesWithQuality.filter((f) => f.trackingQuality?.isCoasting).length,
           trackedFramesWithQuality.length

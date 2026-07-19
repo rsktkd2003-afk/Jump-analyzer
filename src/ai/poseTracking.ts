@@ -251,5 +251,6 @@ export async function analyzeTrackedMotion(
     checkedFrameCount,
     confidence,
     message: buildResultMessage(smoothedFrames, confidence, smoothingEnabled),
+    trackerStats: tracker?.getStats(),
   };
 }

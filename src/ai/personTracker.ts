@@ -27,28 +27,70 @@
 //   生成すれば、前の動画の状態が引き継がれることはない。
 // - フレーム時刻が前回より逆行・停滞した場合は速度による外挿を行わず、
 //   その時点の位置をそのまま予測位置として扱う（異常な外挿を避ける）。
+//
+// 単一候補時の扱い（重要）:
+// - 追跡状態が未確立（初回取得）の場合のみ、既存の selectPoseByPoint
+//   （クリック位置最近傍）を使う。
+// - 追跡状態が確立した後は、候補が1人しかいない場合でも無条件に採用しない。
+//   候補が1人だけの場面は「対象が消え、別人だけが残った」場合と
+//   区別できないため、体格（トルソー長）・ポーズ形状の一致度を中心に
+//   評価し、一致しなければ採用せずcoastingへ移行する。
+//   ただし複数候補から選ぶ場面と異なり「比較対象がいない」ため、
+//   位置・IoUのブレだけで過敏に棄却しないよう、単一候補時は
+//   位置・IoUの重みを下げ、体格・ポーズ形状の重みを上げた
+//   別の重みプロファイルを使う（無条件採用は行わない）。
 // =============================================================
 
 import { KalmanFilter1D } from "../utils/kalmanFilter";
 import { getBodyJoints } from "./poseLandmarks";
 import { selectPoseByPoint } from "./poseSelection";
-import type { Point2D, TrackedLandmark, TrackerFrameQuality } from "./poseTypes";
+import type {
+  PersonTrackerStats,
+  Point2D,
+  TrackedLandmark,
+  TrackerFrameQuality,
+} from "./poseTypes";
 
 // ---- 重み・閾値（すべてここに集約。調整はこのブロックのみで完結する） ----
 
-/** 予測位置との距離コストの重み */
-const WEIGHT_DISTANCE = 1.4;
-/** バウンディングボックスIoUコストの重み */
-const WEIGHT_IOU = 1.2;
-/** 体格（トルソー長）変化コストの重み */
-const WEIGHT_SIZE_CHANGE = 0.8;
-/** ポーズ形状類似度コストの重み */
-const WEIGHT_POSE_SHAPE = 1.0;
-/** 候補のvisibilityが低いことへの追加コスト（可視性が低いほど大きくなる） */
-const WEIGHT_VISIBILITY_PENALTY = 0.6;
+type CostWeights = {
+  distance: number;
+  iou: number;
+  sizeChange: number;
+  poseShape: number;
+  visibilityPenalty: number;
+};
 
-/** このコストを超える候補はマッチとして採用しない（=このフレームは検出なし扱い） */
+/** 複数候補から選ぶ場面の重み。位置・IoUを重視し、明確に近い候補を選ぶ。 */
+const MULTI_CANDIDATE_WEIGHTS: CostWeights = {
+  distance: 1.4,
+  iou: 1.2,
+  sizeChange: 0.8,
+  poseShape: 1.0,
+  visibilityPenalty: 0.6,
+};
+
+/**
+ * 候補が1人だけの場面の重み。
+ * 比較対象がいないため、位置・IoUのブレだけで棄却すると、速い動き・
+ * フレーム間隔の広がりで正当な継続まで弾いてしまう。体格（トルソー長）・
+ * ポーズ形状という「そもそも同一人物の身体らしいか」を示す、位置に
+ * 依存しない手がかりを主軸にする。ただし位置・IoUの重みをゼロにはせず、
+ * 明後日の方向にいる別人を無条件採用しないための最低限の寄与は残す。
+ */
+const SINGLE_CANDIDATE_WEIGHTS: CostWeights = {
+  distance: 0.08,
+  iou: 0.15,
+  sizeChange: 2.4,
+  poseShape: 2.4,
+  visibilityPenalty: 0.6,
+};
+
+/** 複数候補時にこのコストを超える候補はマッチとして採用しない */
 const MAX_ACCEPTABLE_COST = 2.4;
+/** 単一候補時にこのコストを超える場合は採用せずcoastingへ移行する（無条件採用はしない） */
+const MAX_ACCEPTABLE_COST_SINGLE_CANDIDATE = 2.4;
+
 /** 遮蔽とみなして予測のみで維持する最大連続フレーム数を超えたら、
  *  クリック位置基準の再取得にフォールバックする。 */
 const MAX_COASTING_FRAMES = 10;
@@ -88,7 +130,21 @@ export type TrackerMatchResult = {
 
 export type PersonTracker = {
   update: (poses: TrackedLandmark[][], time: number) => TrackerMatchResult;
+  /** 解析全体を通じた統計のスナップショットを返す（呼び出し側で変更しても内部状態には影響しない） */
+  getStats: () => PersonTrackerStats;
 };
+
+function createInitialStats(): PersonTrackerStats {
+  return {
+    updateCount: 0,
+    matchedFrameCount: 0,
+    coastingFrameCount: 0,
+    reacquiredCount: 0,
+    rejectedCandidateCount: 0,
+    matchScoreSum: 0,
+    matchScoreCount: 0,
+  };
+}
 
 function getBoundingBox(landmarks: TrackedLandmark[]): BoundingBox | null {
   const visible = landmarks.filter((p) => (p.visibility ?? 1) > 0.35);
@@ -186,6 +242,26 @@ function poseShapeDistance(a: PoseShapePoint[], b: PoseShapePoint[]): number {
   return totalDistance / totalWeight;
 }
 
+/** getPoseShapeの並び([leftShoulder, rightShoulder, leftHip, rightHip, leftKnee, rightKnee])
+ *  に対応する左右ペアを入れ替えたポーズ形状を返す。 */
+function swapPoseShapeSides(shape: PoseShapePoint[]): PoseShapePoint[] {
+  const [leftShoulder, rightShoulder, leftHip, rightHip, leftKnee, rightKnee] = shape;
+  return [rightShoulder, leftShoulder, rightHip, leftHip, rightKnee, leftKnee];
+}
+
+/**
+ * ポーズ形状の不一致度を、左右ラベルが入れ替わっている可能性を考慮して算出する。
+ * MediaPipeが一時的に左右を取り違えたフレームでも、単なる姿勢の違いと誤認して
+ * トラッカーが対象を見失わないようにする（左右入れ替わりの補正自体は
+ * lateralityCorrection.ts が別途行うため、ここでは「同一人物である可能性を
+ * 過小評価しない」ための頑健性を目的とする）。
+ */
+function robustPoseShapeCost(candidateShape: PoseShapePoint[], referenceShape: PoseShapePoint[]): number {
+  const normal = poseShapeDistance(candidateShape, referenceShape);
+  const swapped = poseShapeDistance(swapPoseShapeSides(candidateShape), referenceShape);
+  return Math.min(normal, swapped);
+}
+
 function averageVisibility(landmarks: TrackedLandmark[]): number {
   const { leftShoulder, rightShoulder, leftHip, rightHip } = getBodyJoints(landmarks);
   const points = [leftShoulder, rightShoulder, leftHip, rightHip].filter(
@@ -220,22 +296,23 @@ function scoreCandidate(
   candidate: Candidate,
   predictedCenter: Point2D,
   predictedBox: BoundingBox,
-  state: TrackerState
+  state: TrackerState,
+  weights: CostWeights
 ): number {
   const normalizer = Math.max(state.torsoLength, MIN_TORSO_PX);
 
   const distanceCost = Math.hypot(candidate.center.x - predictedCenter.x, candidate.center.y - predictedCenter.y) / normalizer;
   const iouCost = 1 - boxIoU(predictedBox, candidate.bbox);
   const sizeCost = Math.abs(Math.log(Math.max(candidate.torsoLength, MIN_TORSO_PX) / normalizer));
-  const poseShapeCost = poseShapeDistance(candidate.shape, state.shape);
+  const poseShapeCost = robustPoseShapeCost(candidate.shape, state.shape);
   const visibilityCost = candidate.visibility < MIN_MATCH_VISIBILITY ? (MIN_MATCH_VISIBILITY - candidate.visibility) : 0;
 
   return (
-    distanceCost * WEIGHT_DISTANCE +
-    iouCost * WEIGHT_IOU +
-    sizeCost * WEIGHT_SIZE_CHANGE +
-    poseShapeCost * WEIGHT_POSE_SHAPE +
-    visibilityCost * WEIGHT_VISIBILITY_PENALTY
+    distanceCost * weights.distance +
+    iouCost * weights.iou +
+    sizeCost * weights.sizeChange +
+    poseShapeCost * weights.poseShape +
+    visibilityCost * weights.visibilityPenalty
   );
 }
 
@@ -300,6 +377,7 @@ function updateStateFromMatch(state: TrackerState, candidate: Candidate, time: n
  */
 export function createPersonTracker(selectedPoint?: Point2D | null): PersonTracker {
   let state: TrackerState | null = null;
+  const stats = createInitialStats();
 
   function acquireFromClickPoint(poses: TrackedLandmark[][], time: number): TrackerMatchResult {
     const pose = selectPoseByPoint(poses, selectedPoint);
@@ -315,6 +393,11 @@ export function createPersonTracker(selectedPoint?: Point2D | null): PersonTrack
     const wasTracking = state !== null;
     state = createStateFromCandidate(candidate, time);
 
+    stats.matchedFrameCount += 1;
+    stats.matchScoreSum += 1;
+    stats.matchScoreCount += 1;
+    if (wasTracking) stats.reacquiredCount += 1;
+
     return {
       pose,
       quality: { matchScore: 1, isCoasting: false, reacquired: wasTracking },
@@ -322,6 +405,8 @@ export function createPersonTracker(selectedPoint?: Point2D | null): PersonTrack
   }
 
   function update(poses: TrackedLandmark[][], time: number): TrackerMatchResult {
+    stats.updateCount += 1;
+
     if (!state) {
       return acquireFromClickPoint(poses, time);
     }
@@ -346,27 +431,36 @@ export function createPersonTracker(selectedPoint?: Point2D | null): PersonTrack
       .map((pose) => buildCandidate(pose))
       .filter((c): c is Candidate => c !== null);
 
+    // 候補が1人だけの場面は「比較対象がいない」ため、位置・IoUに偏らない
+    // 別の重みプロファイルで評価する（3.の「複数候補時とは異なる緩和された閾値」）。
+    // ただしどちらのプロファイルでも無条件採用はしない。
+    const isMultiCandidate = candidates.length > 1;
+    const weights = isMultiCandidate ? MULTI_CANDIDATE_WEIGHTS : SINGLE_CANDIDATE_WEIGHTS;
+    const threshold = isMultiCandidate ? MAX_ACCEPTABLE_COST : MAX_ACCEPTABLE_COST_SINGLE_CANDIDATE;
+
     let best: { candidate: Candidate; cost: number } | null = null;
     for (const candidate of candidates) {
-      const cost = scoreCandidate(candidate, predictedCenter, predictedBox, state);
+      const cost = scoreCandidate(candidate, predictedCenter, predictedBox, state, weights);
       if (!best || cost < best.cost) {
         best = { candidate, cost };
       }
     }
 
-    // コスト閾値は「複数候補から誤って別人へ乗り換えないため」の仕組みであり、
-    // 候補が1人しかいない場合は比較対象がなく乗り換えのリスクもないため、
-    // コストに関わらずその1人を採用する（外れ値の除去は既存の
-    // removeCenterOutliers/Kalman平滑化が後段で引き続き担う）。
-    const isOnlyCandidate = candidates.length === 1;
-
-    if (best && (isOnlyCandidate || best.cost <= MAX_ACCEPTABLE_COST)) {
+    if (best && best.cost <= threshold) {
       const wasCoasting = state.missedFrames > 0;
       updateStateFromMatch(state, best.candidate, time);
+
+      const matchScore = 1 / (1 + best.cost);
+      stats.matchedFrameCount += 1;
+      stats.matchScoreSum += matchScore;
+      stats.matchScoreCount += 1;
+      if (wasCoasting) stats.reacquiredCount += 1;
+      stats.rejectedCandidateCount += candidates.length - 1;
+
       return {
         pose: best.candidate.landmarks,
         quality: {
-          matchScore: 1 / (1 + best.cost),
+          matchScore,
           isCoasting: false,
           reacquired: wasCoasting,
         },
@@ -374,17 +468,26 @@ export function createPersonTracker(selectedPoint?: Point2D | null): PersonTrack
     }
 
     // マッチなし：見失ったフレームとして数える。
+    stats.rejectedCandidateCount += candidates.length;
     state.missedFrames += 1;
 
     if (state.missedFrames > MAX_COASTING_FRAMES) {
       // 長時間見失った場合のみ、既存のクリック位置基準の選択方式へフォールバックする。
-      return acquireFromClickPoint(poses, time);
+      const reacquireResult = acquireFromClickPoint(poses, time);
+      if (!reacquireResult.pose) {
+        stats.coastingFrameCount += 1;
+      }
+      return reacquireResult;
     }
 
     // 遮蔽中：予測のみで状態を維持し、このフレームは「検出なし」として返す
     // （呼び出し側は既存同様にこのフレームをスキップできる。例外は投げない）。
+    stats.coastingFrameCount += 1;
     return { pose: null };
   }
 
-  return { update };
+  return {
+    update,
+    getStats: () => ({ ...stats }),
+  };
 }

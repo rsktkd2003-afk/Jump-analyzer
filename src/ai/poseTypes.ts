@@ -70,10 +70,35 @@ export type LateralityCorrectionResult = {
 export type TrackerFrameQuality = {
   /** 予測・IoU・サイズ・ポーズ類似度等を統合したマッチングスコア（0〜1、高いほど良い） */
   matchScore: number;
-  /** このフレームで一時的に対象を見失い、予測のみで維持したか */
+  /** 予約フィールド。coasting中はTrackedFrame自体が生成されないため、
+   *  このフィールドが付与されたフレームでは常にfalseになる。
+   *  coasting比率の集計には PersonTrackerStats.coastingFrameCount を使うこと。 */
   isCoasting: boolean;
   /** 対象を再取得した直後のフレームか */
   reacquired: boolean;
+};
+
+/**
+ * 軽量トラッカーの解析全体を通じた統計。
+ * coasting（予測のみで維持したフレーム）は pose:null を返すため
+ * TrackedFrame自体が生成されない。そのため生成済みのTrackedFrame[]から
+ * 事後的に逆算するのではなく、トラッカー自身がカウントを保持する。
+ */
+export type PersonTrackerStats = {
+  /** update()が呼ばれた総フレーム数 */
+  updateCount: number;
+  /** 候補を同一人物として採用できたフレーム数（初回取得・再取得を含む） */
+  matchedFrameCount: number;
+  /** 候補を採用せず予測状態のみを維持した（=検出なし扱いにした）フレーム数 */
+  coastingFrameCount: number;
+  /** MAX_COASTING_FRAMES超過後、クリック位置基準で再取得できた回数 */
+  reacquiredCount: number;
+  /** マッチングスコアが閾値を満たさず不採用になった候補の延べ数 */
+  rejectedCandidateCount: number;
+  /** 採用できたフレームのマッチングスコアの合計（平均算出用） */
+  matchScoreSum: number;
+  /** matchScoreSumの対象フレーム数 */
+  matchScoreCount: number;
 };
 
 export type LandmarkSmoothingOptions = {
@@ -90,6 +115,8 @@ export type MotionTrackingResult = {
   checkedFrameCount: number;
   confidence: number;
   message: string;
+  /** 軽量トラッカー（Phase1）の統計。トラッカー未使用（Feature Flag OFF）時はundefined */
+  trackerStats?: PersonTrackerStats;
 };
 
 export type PoseAnalysisResult = {

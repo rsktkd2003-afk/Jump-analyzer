@@ -109,6 +109,7 @@ function JumpAnalyzer() {
 
   const {
     trackedFrames,
+    trackerStats,
     currentTrackedFrame,
     trackingMessage,
     trackingProgress,
@@ -162,8 +163,8 @@ function JumpAnalyzer() {
   // 自動フォーム解析結果（既存の analysis/evaluation ロジックを結果画面向けに集約表示するだけ）
   const analysisResult = useMemo(() => {
     if (trackedFrames.length < 3) return null;
-    return analyze(trackedFrames, skillId);
-  }, [trackedFrames, skillId]);
+    return analyze(trackedFrames, skillId, trackerStats);
+  }, [trackedFrames, skillId, trackerStats]);
 
   const handleSaveHistory = async (userId: string, draft: AnalysisHistoryDraft) => {
     await saveAnalysisHistory(userId, draft);

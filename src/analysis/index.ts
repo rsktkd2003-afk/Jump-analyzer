@@ -1,5 +1,6 @@
 import type { AnalysisResult, SkillDefinition, SkillId } from "./types";
 import type { TrackedFrame } from "../ai/poseAnalyzer";
+import type { PersonTrackerStats } from "../ai/poseTypes";
 import { spikeJumpDefinition } from "./skills/spikeJump";
 import { deriveQualitySignalsFromFrames } from "../ai/trackingQualitySignals";
 import { ENABLE_CONFIDENCE_V2 } from "../ai/featureFlags";
@@ -18,7 +19,8 @@ const skillDefinitions: Record<SkillId, SkillDefinition> = {
 
 export function analyze(
   frames: TrackedFrame[],
-  skillId: SkillId
+  skillId: SkillId,
+  trackerStats?: PersonTrackerStats
 ): AnalysisResult {
   const definition = skillDefinitions[skillId];
   const segments = definition.segment(frames);
@@ -28,7 +30,9 @@ export function analyze(
     skillId,
     segments,
     features,
-    qualitySignals: ENABLE_CONFIDENCE_V2 ? deriveQualitySignalsFromFrames(frames) : undefined,
+    qualitySignals: ENABLE_CONFIDENCE_V2
+      ? deriveQualitySignalsFromFrames(frames, trackerStats)
+      : undefined,
   };
 }
 
