@@ -3,6 +3,7 @@ import {
   analyzeTrackedMotion,
   type TrackedFrame,
 } from "../ai/trackingAnalyzer";
+import type { PersonTrackerStats } from "../ai/poseTypes";
 import { summarizeMotion } from "../ai/motionAnalyzer";
 import type { SelectedPersonPoint } from "./useSelectedPerson";
 import {
@@ -17,6 +18,7 @@ export function useMotionTracking(
   selectedPoint: SelectedPersonPoint | null
 ) {
   const [trackedFrames, setTrackedFrames] = useState<TrackedFrame[]>([]);
+  const [trackerStats, setTrackerStats] = useState<PersonTrackerStats | undefined>(undefined);
   const [trackingMessage, setTrackingMessage] = useState("");
   const [trackingProgress, setTrackingProgress] = useState(0);
   const [isTracking, setIsTracking] = useState(false);
@@ -34,6 +36,7 @@ export function useMotionTracking(
 
   const resetTracking = () => {
     setTrackedFrames([]);
+    setTrackerStats(undefined);
     setTrackingMessage("");
     setTrackingProgress(0);
   };
@@ -56,6 +59,7 @@ export function useMotionTracking(
       );
 
       setTrackedFrames(result.frames);
+      setTrackerStats(result.trackerStats);
       setTrackingMessage(createTrackingMessage(result));
     } catch (error) {
       console.error(error);
@@ -67,6 +71,7 @@ export function useMotionTracking(
 
   return {
     trackedFrames,
+    trackerStats,
     currentTrackedFrame,
     motionSummary,
     trackingMessage,
