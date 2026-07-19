@@ -14,19 +14,25 @@
 //    既存のselectPoseByPointへ安全にフォールバックする。
 // =============================================================
 
-import type { PoseLandmarker } from "@mediapipe/tasks-vision";
+import type { Landmark, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { getPoseLandmarker } from "./poseLandmarkerClient";
 import { createTrackedFrame, recreateTrackedFrameFromLandmarks } from "./poseFrameFactory";
 import { selectPoseByPoint } from "./poseSelection";
 import { createPersonTracker, type PersonTracker } from "./personTracker";
 import { seekVideo } from "./poseVideo";
 import { removeCenterOutliers, smoothFramesWithKalman } from "./poseTrackingSmoothing";
-import { correctLateralityForSequence } from "./lateralityCorrection";
-import { ENABLE_LATERALITY_CORRECTION, ENABLE_TEMPORAL_TRACKER } from "./featureFlags";
+import { correctLateralityForSequence, LATERAL_LANDMARK_INDEX_PAIRS } from "./lateralityCorrection";
+import { runPose3DPipeline } from "./pose3DPipeline";
+import {
+  ENABLE_LATERALITY_CORRECTION,
+  ENABLE_TEMPORAL_TRACKER,
+  ENABLE_WORLD_LANDMARKS_3D,
+} from "./featureFlags";
 import type {
   MotionTrackingOptions,
   MotionTrackingResult,
   Point2D,
+  PoseWorldLandmark,
   TrackedFrame,
   TrackedLandmark,
 } from "./poseTypes";
@@ -72,9 +78,31 @@ function smoothFrames(
 }
 
 /**
+ * 3D worldLandmarksに対して、2D側と同じ左右対インデックスで入れ替えを行う。
+ * 2D/3Dで別々に左右判定を行わないよう、判定結果（swapするか否か）は
+ * 呼び出し側（2D側のLateralityCorrectionResult.corrected）にのみ従い、
+ * ここではインデックス対応（LATERAL_LANDMARK_INDEX_PAIRS）だけを使う。
+ */
+function swapWorldLandmarks3D(landmarks: PoseWorldLandmark[]): PoseWorldLandmark[] {
+  const result = [...landmarks];
+
+  for (const [left, right] of LATERAL_LANDMARK_INDEX_PAIRS) {
+    const leftPoint = landmarks[left];
+    const rightPoint = landmarks[right];
+    if (!leftPoint || !rightPoint) continue;
+    result[left] = rightPoint;
+    result[right] = leftPoint;
+  }
+
+  return result;
+}
+
+/**
  * 左右入れ替わり補正を、収集済みフレーム列全体に対して適用する。
  * Kalman平滑化（poseTrackingSmoothing.ts）より前で行う必要がある。
  * フラグOFF時は何もしない（既存挙動を維持）。
+ * 2D側で入れ替えが発生したフレームは、そのフレームのworldLandmarks3Dが
+ * あれば同じ左右対を入れ替える（2Dと3Dが別人の関節を指す状態を防ぐ）。
  */
 function applyLateralityCorrection(
   frames: TrackedFrame[],
@@ -95,8 +123,56 @@ function applyLateralityCorrection(
     }
 
     const rebuilt = recreateTrackedFrameFromLandmarks(frame, landmarks, videoWidth, videoHeight);
-    return { ...rebuilt, lateralityCorrection: result };
+    const worldLandmarks3D = frame.worldLandmarks3D
+      ? swapWorldLandmarks3D(frame.worldLandmarks3D)
+      : undefined;
+
+    return {
+      ...rebuilt,
+      lateralityCorrection: result,
+      ...(worldLandmarks3D ? { worldLandmarks3D } : {}),
+    };
   });
+}
+
+function toPoseWorldLandmarks(landmarks: Landmark[]): PoseWorldLandmark[] {
+  return landmarks.map((point) => ({
+    x: point.x,
+    y: point.y,
+    z: point.z,
+    visibility: point.visibility,
+  }));
+}
+
+/**
+ * 選択された2Dランドマークと同じ人物の3D worldLandmarksを取得する。
+ * `poses`（toPixelPosesの出力）とtracker.update/selectPoseByPointが返す`pose`は
+ * 同じ配列要素を参照で共有しているため、poses.indexOf(pose)で元の検出順
+ * インデックスを復元でき、そのインデックスでresult.worldLandmarksを引ける
+ * （landmarksとworldLandmarksはMediaPipe側で同じ人物順序に揃っている）。
+ * この時点では欠損・不正値の検証は行わない（検証はpose3DPipeline.tsで
+ * フレーム列全体に対して行う）。
+ * worldLandmarksByPoseは型定義上は必須だが、テスト用モック等で欠落する
+ * ケースに備えoptionalとして扱う。
+ */
+function extractWorldLandmarks3D(
+  poses: TrackedLandmark[][],
+  pose: TrackedLandmark[],
+  worldLandmarksByPose: Landmark[][] | undefined
+): PoseWorldLandmark[] | undefined {
+  if (!ENABLE_WORLD_LANDMARKS_3D) {
+    return undefined;
+  }
+
+  const poseIndex = poses.indexOf(pose);
+  const rawWorldLandmarks =
+    poseIndex >= 0 ? worldLandmarksByPose?.[poseIndex] : undefined;
+
+  if (!rawWorldLandmarks) {
+    return undefined;
+  }
+
+  return toPoseWorldLandmarks(rawWorldLandmarks);
 }
 
 function detectFrame(
@@ -126,6 +202,8 @@ function detectFrame(
     return null;
   }
 
+  const worldLandmarks3D = extractWorldLandmarks3D(poses, pose, result.worldLandmarks);
+
   const frame = createTrackedFrame(
     pose,
     Math.round(time * fps),
@@ -134,11 +212,15 @@ function detectFrame(
     video.videoHeight
   );
 
-  if (frame && quality) {
-    return { ...frame, trackingQuality: quality };
+  if (!frame) {
+    return null;
   }
 
-  return frame;
+  return {
+    ...frame,
+    ...(quality ? { trackingQuality: quality } : {}),
+    ...(worldLandmarks3D ? { worldLandmarks3D } : {}),
+  };
 }
 
 function buildResultMessage(
@@ -232,9 +314,13 @@ export async function analyzeTrackedMotion(
     video.videoHeight
   );
 
+  const pose3DResult = ENABLE_WORLD_LANDMARKS_3D
+    ? runPose3DPipeline(lateralityCorrectedFrames)
+    : { frames: lateralityCorrectedFrames, qualitySignals: undefined };
+
   const smoothingEnabled = shouldApplySmoothing(options);
   const smoothedFrames = smoothFrames(
-    lateralityCorrectedFrames,
+    pose3DResult.frames,
     video.videoWidth,
     video.videoHeight,
     options
@@ -252,5 +338,6 @@ export async function analyzeTrackedMotion(
     confidence,
     message: buildResultMessage(smoothedFrames, confidence, smoothingEnabled),
     trackerStats: tracker?.getStats(),
+    pose3DQuality: pose3DResult.qualitySignals,
   };
 }
