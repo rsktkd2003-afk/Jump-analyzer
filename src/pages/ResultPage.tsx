@@ -5,6 +5,7 @@ import StarRow from "../components/ui/StarRow";
 import GoogleSignInButton from "../components/GoogleSignInButton";
 import SaveHistoryModal from "../components/SaveHistoryModal";
 import CategoryScoreList from "../components/CategoryScoreList";
+import AuthModal from "../components/auth/AuthModal";
 import {
   ChevronLeftIcon,
   CheckCircleIcon,
@@ -26,6 +27,7 @@ import { captureSettingLabelParts, captureSettingsLabel } from "../ai/captureSet
 import { buildConfidenceAwareSummary } from "../utils/analysisConfidence";
 import type { AuthUser } from "../firebase/authService";
 import { fetchSavedAnalysisId } from "../firebase/historyService";
+import type { EmailAuthState } from "../hooks/useAuth";
 import type { AnalysisHistoryDraft } from "../types/analysisHistory";
 import { ANALYSIS_VERSION } from "../types/analysisHistory";
 import { card, colors, ghostButton, mutedText, page, primaryButton, radius, sectionTitle } from "../styles/theme";
@@ -60,8 +62,9 @@ type Props = {
   isFirebaseReady: boolean;
   isSigningIn: boolean;
   signInError: string | null;
-  onSignIn: () => Promise<void>;
+  onSignIn: () => Promise<boolean>;
   onSaveHistory: (uid: string, draft: AnalysisHistoryDraft) => Promise<void>;
+  emailAuth: EmailAuthState;
 
   onBack: () => void;
   onShare: () => void;
@@ -92,6 +95,7 @@ export default function ResultPage({
   signInError,
   onSignIn,
   onSaveHistory,
+  emailAuth,
   onBack,
   onShare,
 }: Props) {
@@ -99,12 +103,19 @@ export default function ResultPage({
   const [playbackRate, setPlaybackRate] = useState(1);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
   const [pendingDraftFields, setPendingDraftFields] = useState<{ title: string; memo: string } | null>(null);
 
   const confidenceSummary = useMemo(
-    () => buildConfidenceAwareSummary(analysisResult?.features ?? [], captureSettings, trackedFrameCount),
+    () =>
+      buildConfidenceAwareSummary(
+        analysisResult?.features ?? [],
+        captureSettings,
+        trackedFrameCount,
+        analysisResult?.qualitySignals
+      ),
     [analysisResult, captureSettings, trackedFrameCount]
   );
 
@@ -238,6 +249,17 @@ export default function ResultPage({
     setIsModalOpen(true);
   };
 
+  const handleOpenAuthModal = () => {
+    // メールログイン用モーダルを開く場合も、Googleログインと同様に保存内容を退避しておく。
+    if (analysisId) {
+      sessionStorage.setItem(
+        PENDING_SAVE_STORAGE_KEY,
+        JSON.stringify({ analysisId, title: "", memo: "" })
+      );
+    }
+    setIsAuthModalOpen(true);
+  };
+
   const reachMeasurementStatus = () => {
     if (reachEstimate.confidence === null) return "notMeasured" as const;
     if (reachEstimate.confidence === "低") return "reference" as const;
@@ -361,13 +383,18 @@ export default function ResultPage({
 
         <div className="no-print" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {!authUser && isFirebaseReady ? (
-            <GoogleSignInButton
-              onClick={handleOpenSaveModal}
-              isLoading={isSigningIn}
-              variant="ghost"
-              label={saveButtonLabel}
-              style={{ fontSize: 13 }}
-            />
+            <>
+              <GoogleSignInButton
+                onClick={handleOpenSaveModal}
+                isLoading={isSigningIn}
+                variant="ghost"
+                label={saveButtonLabel}
+                style={{ fontSize: 13 }}
+              />
+              <button type="button" style={{ ...ghostButton, fontSize: 13 }} onClick={handleOpenAuthModal}>
+                メールでログイン
+              </button>
+            </>
           ) : (
             <button
               style={{
@@ -566,6 +593,15 @@ export default function ResultPage({
           </span>
         </div>
       </div>
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        emailAuth={emailAuth}
+        onGoogleSignIn={() => void onSignIn()}
+        isGoogleSigningIn={isSigningIn}
+        googleError={signInError}
+      />
 
       {analyzedAt && (
         <SaveHistoryModal
