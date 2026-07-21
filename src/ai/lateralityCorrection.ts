@@ -95,6 +95,15 @@ function distance(a: TrackedLandmark, b: TrackedLandmark): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/**
+ * 左右対のランドマークインデックス一覧（[left, right]のタプル）。
+ * Phase2の3D側で、2D側の左右交換判定と同じ交換をミラーする際に使う
+ * （2Dと3Dで別々に左右判定をしないため、判定ロジックそのものではなく
+ * 「どのインデックスが対になっているか」だけをここから再利用する）。
+ */
+export const LATERAL_LANDMARK_INDEX_PAIRS: ReadonlyArray<readonly [number, number]> =
+  LATERAL_PAIRS.map((pair) => [pair.left, pair.right] as const);
+
 /** 左右対をまとめて入れ替えたランドマーク配列を返す（それ以外の点は変更しない） */
 export function swapLateralLandmarks(landmarks: TrackedLandmark[]): TrackedLandmark[] {
   const result = [...landmarks];
