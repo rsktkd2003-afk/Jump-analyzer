@@ -17,6 +17,36 @@ function validWorldLandmarks(offsetX = 0): PoseWorldLandmark[] {
   return landmarks;
 }
 
+/**
+ * 移動量検証（validatePose3DMotion）は肩・腰以外の関節（肘・手首・膝・足首）の
+ * 形状変化を見るため、validWorldLandmarksのような肩・腰しか差別化しないビルダーでは
+ * 平行移動しか表現できず、人物乗り換え相当の「形状」変化を再現できない。
+ * このヘルパーはその全関節を差別化した姿勢を返す（isPersonSwap=trueで
+ * 肘・手首・膝・足首を大きくずらした別形状にする）。
+ */
+function richWorldLandmarks(isPersonSwap = false): PoseWorldLandmark[] {
+  const landmarks: PoseWorldLandmark[] = Array.from({ length: 33 }, () => ({
+    x: 0,
+    y: 0,
+    z: 0,
+    visibility: 1,
+  }));
+  const shift = isPersonSwap ? 0.5 : 0;
+  landmarks[11] = { x: -0.175, y: 0.25, z: 0, visibility: 1 };
+  landmarks[12] = { x: 0.175, y: 0.25, z: 0, visibility: 1 };
+  landmarks[13] = { x: -0.22 - shift, y: 0.1, z: 0.05, visibility: 1 };
+  landmarks[14] = { x: 0.22 + shift, y: 0.1, z: 0.05, visibility: 1 };
+  landmarks[15] = { x: -0.25, y: -0.05 + shift, z: 0.1, visibility: 1 };
+  landmarks[16] = { x: 0.25, y: -0.05 - shift, z: 0.1, visibility: 1 };
+  landmarks[23] = { x: -0.1, y: -0.25, z: 0, visibility: 1 };
+  landmarks[24] = { x: 0.1, y: -0.25, z: 0, visibility: 1 };
+  landmarks[25] = { x: -0.1, y: -0.6 + shift, z: 0, visibility: 1 };
+  landmarks[26] = { x: 0.1, y: -0.6 - shift, z: 0, visibility: 1 };
+  landmarks[27] = { x: -0.12 - shift, y: -0.95, z: 0, visibility: 1 };
+  landmarks[28] = { x: 0.12 + shift, y: -0.95, z: 0, visibility: 1 };
+  return landmarks;
+}
+
 function makeFrame(
   frameIndex: number,
   time: number,
@@ -82,11 +112,14 @@ describe("runPose3DPipeline", () => {
     expect(result.frames[0].landmarks).toEqual([]);
   });
 
-  it("移動量が異常なフレームはabnormal-motionとして無効化され、品質シグナルに反映される", () => {
+  it("骨格形状が人物乗り換え相当に急変したフレームはabnormal-motionとして無効化され、品質シグナルに反映される", () => {
+    // worldLandmarksは股関節中点付近を原点とする人物中心座標のため、単純な平行移動
+    // （旧: validWorldLandmarks(5)）では移動量検証が発火しない。骨格「形状」自体が
+    // 急変するケース（人物乗り換え相当）で発火することを検証する。
     const frames = [
-      makeFrame(0, 0, validWorldLandmarks(0)),
-      makeFrame(1, 0.1, validWorldLandmarks(5)), // 非現実的な移動量
-      makeFrame(2, 0.2, validWorldLandmarks(0.02)),
+      makeFrame(0, 0, richWorldLandmarks(false)),
+      makeFrame(1, 0.1, richWorldLandmarks(true)), // 人物乗り換え相当の形状急変
+      makeFrame(2, 0.2, richWorldLandmarks(false)),
     ];
 
     const result = runPose3DPipeline(frames);
