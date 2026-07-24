@@ -23,6 +23,15 @@ googleProvider.setCustomParameters({
   prompt: "select_account",
 });
 
+function toAuthUser(user: User): AuthUser {
+  return {
+    uid: user.uid,
+    displayName: user.displayName ?? user.email?.split("@")[0] ?? "ユーザー",
+    photoURL: user.photoURL,
+    email: user.email,
+  };
+}
+
 export class AuthNotConfiguredError extends Error {
   constructor() {
     super("Firebaseが設定されていないため、ログインできません。");
@@ -75,13 +84,13 @@ export function describeSignInError(error: unknown): string {
 export async function signInWithGoogle(): Promise<AuthUser> {
   if (!auth) throw new AuthNotConfiguredError();
   const result = await signInWithPopup(auth, googleProvider);
-  return result.user;
+  return toAuthUser(result.user);
 }
 
 export async function signInWithEmail(email: string, password: string): Promise<AuthUser> {
   if (!auth) throw new AuthNotConfiguredError();
   const result = await signInWithEmailAndPassword(auth, email.trim(), password);
-  return result.user;
+  return toAuthUser(result.user);
 }
 
 export async function createUserWithEmail(params: {
@@ -103,8 +112,7 @@ export async function createUserWithEmail(params: {
   );
 
   await updateProfile(result.user, { displayName });
-  await result.user.reload();
-  return auth.currentUser ?? result.user;
+  return toAuthUser(result.user);
 }
 
 export async function signOutUser(): Promise<void> {
@@ -120,6 +128,6 @@ export function subscribeToAuthState(
     return () => {};
   }
   return onAuthStateChanged(auth, (user) => {
-    callback(user);
+    callback(user ? toAuthUser(user) : null);
   });
 }
