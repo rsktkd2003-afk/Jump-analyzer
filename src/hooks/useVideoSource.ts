@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export const REMOVE_VIDEO_EVENT = "jump-analyzer:remove-video";
 
@@ -14,7 +14,7 @@ export function useVideoSource() {
   const [videoName, setVideoName] = useState("");
   const [currentTime, setCurrentTime] = useState(0);
 
-  const clearFile = () => {
+  const clearFile = useCallback(() => {
     const video = videoRef.current;
     if (video) {
       video.pause();
@@ -30,20 +30,19 @@ export function useVideoSource() {
     setVideoUrl(null);
     setVideoName("");
     setCurrentTime(0);
-  };
+  }, []);
 
   useEffect(() => {
-    const handleRemoveVideo = () => clearFile();
-    window.addEventListener(REMOVE_VIDEO_EVENT, handleRemoveVideo);
+    window.addEventListener(REMOVE_VIDEO_EVENT, clearFile);
 
     return () => {
-      window.removeEventListener(REMOVE_VIDEO_EVENT, handleRemoveVideo);
+      window.removeEventListener(REMOVE_VIDEO_EVENT, clearFile);
       if (objectUrlRef.current) {
         URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = null;
       }
     };
-  }, []);
+  }, [clearFile]);
 
   const loadFile = (file: File) => {
     if (objectUrlRef.current) {
