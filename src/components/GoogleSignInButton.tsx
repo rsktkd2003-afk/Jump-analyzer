@@ -1,3 +1,4 @@
+import EmailAuthPanel from "./EmailAuthPanel";
 import { ghostButton, primaryButton } from "../styles/theme";
 
 type Props = {
@@ -41,23 +42,28 @@ export default function GoogleSignInButton({
   style,
 }: Props) {
   const base = variant === "primary" ? primaryButton : ghostButton;
+  const showEmailAuth = variant === "ghost";
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled || isLoading}
-      style={{
-        ...base,
-        background: variant === "primary" ? "#fff" : base.background,
-        color: "#3C4043",
-        border: "1px solid #DADCE0",
-        opacity: disabled || isLoading ? 0.6 : 1,
-        cursor: disabled || isLoading ? "not-allowed" : "pointer",
-        ...style,
-      }}
-    >
-      <GoogleLogo />
-      {isLoading ? "ログイン中..." : label}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled || isLoading}
+        style={{
+          ...base,
+          background: variant === "primary" ? "#fff" : base.background,
+          color: "#3C4043",
+          border: "1px solid #DADCE0",
+          opacity: disabled || isLoading ? 0.6 : 1,
+          cursor: disabled || isLoading ? "not-allowed" : "pointer",
+          ...style,
+        }}
+      >
+        <GoogleLogo />
+        {isLoading ? "ログイン中..." : label}
+      </button>
+      {showEmailAuth && <EmailAuthPanel />}
+    </>
   );
 }
