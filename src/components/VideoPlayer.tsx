@@ -5,6 +5,7 @@ import TrackingSection from "./TrackingSection";
 import FormAnalysisSection from "./FormAnalysisSection";
 
 import type { SelectedPersonPoint } from "../hooks/useSelectedPerson";
+import { REMOVE_VIDEO_EVENT } from "../hooks/useVideoSource";
 import { colors, radius } from "../styles/theme";
 
 import type { MarkerTarget, Markers } from "../types/measurement";
@@ -22,7 +23,6 @@ type Props = {
   markers: Markers;
   markerTarget: MarkerTarget;
   onMarkerPlace: (target: MarkerTarget, point: { x: number; y: number }) => void;
-  /** 身長・指高（トラッキング解析のcm換算用、任意） */
   bodyProfile?: BodyProfile;
 
   videoRef: React.RefObject<HTMLVideoElement | null>;
@@ -34,7 +34,6 @@ type Props = {
   selectedPoint: SelectedPersonPoint | null;
   onVideoClickSelectPerson: (e: React.MouseEvent<HTMLVideoElement>, video: HTMLVideoElement) => void;
 
-  // トラッキング（人物追跡）
   trackedFrames: TrackedFrame[];
   currentTrackedFrame: TrackedFrame | null;
   trackingMessage: string;
@@ -44,7 +43,6 @@ type Props = {
   setIsSmoothingEnabled: (value: boolean) => void;
   runTracking: () => void;
 
-  // フォーム解析
   formResult: JumpFormAnalysisResult | null;
   peakFrame: number | null;
   peakTime: number | null;
@@ -93,9 +91,6 @@ export default function VideoPlayer({
   analyzeForm,
 }: Props) {
   const currentFrame = Math.round(currentTime * fps);
-
-  // ref.current はレンダー中に読まないため、動画の実寸は
-  // onLoadedMetadata で state に取り込んでからマーカー位置計算に使う。
   const [videoNaturalSize, setVideoNaturalSize] = useState<{ width: number; height: number } | null>(
     null
   );
@@ -105,7 +100,6 @@ export default function VideoPlayer({
     if (!video) return;
 
     const rect = video.getBoundingClientRect();
-
     const point = toNaturalPoint(
       { x: e.clientX, y: e.clientY },
       { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
@@ -116,12 +110,21 @@ export default function VideoPlayer({
     onVideoClickSelectPerson(e, video);
   };
 
+  const handleRemoveVideo = () => {
+    if (isTracking || isAnalyzingForm) return;
+
+    window.dispatchEvent(new Event(REMOVE_VIDEO_EVENT));
+    document
+      .querySelectorAll<HTMLInputElement>('input[type="file"][accept="video/*"]')
+      .forEach((input) => {
+        input.value = "";
+      });
+    setVideoNaturalSize(null);
+  };
+
   const getMarkerStyle = (point: { x: number; y: number }) => {
     if (!videoNaturalSize) {
-      return {
-        left: "0%",
-        top: "0%",
-      };
+      return { left: "0%", top: "0%" };
     }
 
     return {
@@ -134,7 +137,38 @@ export default function VideoPlayer({
 
   return (
     <section>
-      <p style={{ fontSize: 13, color: colors.bodyText, marginBottom: 8, overflowWrap: "anywhere" }}>{videoName}</p>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 8,
+        }}
+      >
+        <p style={{ fontSize: 13, color: colors.bodyText, overflowWrap: "anywhere", margin: 0 }}>
+          {videoName}
+        </p>
+        <button
+          type="button"
+          onClick={handleRemoveVideo}
+          disabled={isTracking || isAnalyzingForm}
+          style={{
+            flexShrink: 0,
+            border: `1px solid ${colors.border}`,
+            borderRadius: radius.sm,
+            background: "#fff",
+            color: isTracking || isAnalyzingForm ? colors.mutedText : "#c62828",
+            cursor: isTracking || isAnalyzingForm ? "not-allowed" : "pointer",
+            fontSize: 12,
+            fontWeight: 700,
+            padding: "7px 10px",
+          }}
+          aria-label="読み込んだ動画を外す"
+        >
+          動画を外す
+        </button>
+      </div>
 
       <p style={{ fontSize: 12, color: colors.bodyText, marginBottom: 8 }}>
         動画内の選手をクリックして選択してください（現在のタップ対象：
@@ -258,6 +292,8 @@ export default function VideoPlayer({
       <hr style={{ margin: "16px 0", border: "none", borderTop: `1px solid ${colors.border}` }} />
 
       <FormAnalysisSection
+        videoRef={videoRef}
+        fps={fps}
         onPeakDetected={onPeakDetected}
         formResult={formResult}
         peakFrame={peakFrame}
