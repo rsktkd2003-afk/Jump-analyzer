@@ -292,8 +292,6 @@ export default function VideoPlayer({
       <hr style={{ margin: "16px 0", border: "none", borderTop: `1px solid ${colors.border}` }} />
 
       <FormAnalysisSection
-        videoRef={videoRef}
-        fps={fps}
         onPeakDetected={onPeakDetected}
         formResult={formResult}
         peakFrame={peakFrame}
